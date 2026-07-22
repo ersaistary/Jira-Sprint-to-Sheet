@@ -1,0 +1,46 @@
+# dependencies
+/node_modules
+/.pnp
+.pnp.js
+package-lock.json.bak
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+Thumbs.db
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# env files (kredensial - JANGAN pernah commit)
+.env
+.env*.local
+.env.development
+.env.production
+
+# vercel
+.vercelcs
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# editor
+.vscode/
+.idea/
+
+# service account / credential files kalau kamu simpan sebagai file terpisah
+*service-account*.json
+*credentials*.json
