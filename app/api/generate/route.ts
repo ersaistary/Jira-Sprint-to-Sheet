@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { GoogleGenAI } from '@google/genai';
 import { google } from 'googleapis';
+import { fetchRecentSprintIssues } from '../../lib/jira';
 
 // --- Gemini client (new unified SDK) ---
 // @google/generative-ai is deprecated (google-gemini/deprecated-generative-ai-js).
@@ -111,8 +112,10 @@ function makeSheetTitle(): string {
   const d = now.toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' });
   const t = now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
   // Karakter : / \ ? * [ ] tidak boleh dipakai di nama tab Google Sheets
-  return `Sprint ${d} ${t}`.replace(/[:/\\?*[\]]/g, '.');
+  const raw = 'Sprint ' + d + ' ' + t;
+  return raw.replace(/[:/\\?*[\]]/g, '.');
 }
+
 
 async function createNewSheetTab(
   sheets: ReturnType<typeof google.sheets>,
@@ -140,7 +143,7 @@ async function createNewSheetTab(
       const message = err?.errors?.[0]?.message || err?.message || '';
       if (message.toLowerCase().includes('already exists')) {
         attempt += 1;
-        title = `${makeSheetTitle()} (${attempt + 1})`;
+        title = makeSheetTitle() + ' (' + (attempt + 1) + ')';
         continue;
       }
       throw err;
@@ -236,13 +239,21 @@ ${rawText}`;
 export async function POST(req: Request) {
   try {
     const formData = await req.formData();
+    const source = formData.get('source') as string | null; // "jira" | null
     const file = formData.get('file') as File | null;
     const rawTextParam = formData.get('rawText') as string | null;
 
     let textToProcess = '';
 
+    // 0. Mode baru: ambil task langsung dari Jira REST API (1-2 sprint terakhir)
+    if (source === 'jira') {
+      const sprintCount = parseInt(formData.get('sprintCount') as string || '2', 10);
+      console.log(`[Server] Mengambil task dari Jira API (${sprintCount} sprint terakhir)...`);
+      textToProcess = await fetchRecentSprintIssues(sprintCount);
+      console.log('[Server] Preview teks dari Jira:', textToProcess.slice(0, 500));
+    }
     // 1. Ekstraksi teks berdasarkan input (File atau Textarea)
-    if (file) {
+    else if (file) {
       const bytes = await file.arrayBuffer();
       const buffer = Buffer.from(bytes);
 
@@ -276,7 +287,7 @@ export async function POST(req: Request) {
 
     if (!textToProcess.trim()) {
       return NextResponse.json({
-        error: 'Tidak ada teks yang dapat diproses. Pastikan dokumen kamu berisi teks yang valid!'
+        error: 'Tidak ada teks yang dapat diproses. Pastikan sumber data (file / teks / Jira) berisi konten yang valid!'
       }, { status: 400 });
     }
 
@@ -303,7 +314,7 @@ export async function POST(req: Request) {
     if (finishReason === 'MAX_TOKENS') {
       console.error('[Server] Respons AI terpotong (MAX_TOKENS). Panjang teks:', compactText.length);
       return NextResponse.json({
-        error: 'Dokumen terlalu panjang untuk diproses sekali jalan (respons AI terpotong). Coba split dokumen jadi beberapa bagian lebih kecil, lalu generate satu-satu.',
+        error: 'Data terlalu panjang untuk diproses sekali jalan (respons AI terpotong). Kalau pakai mode Jira, coba pilih 1 sprint saja. Untuk file, coba split jadi beberapa bagian lebih kecil.',
       }, { status: 502 });
     }
 
@@ -338,7 +349,7 @@ export async function POST(req: Request) {
         parsed = repaired;
       } else {
         return NextResponse.json({
-          error: 'AI mengembalikan format yang tidak valid. Coba generate ulang; kalau berulang terjadi, coba dengan dokumen yang lebih pendek.',
+          error: 'AI mengembalikan format yang tidak valid. Coba generate ulang; kalau berulang terjadi, coba dengan data yang lebih pendek.',
         }, { status: 502 });
       }
     }
@@ -348,7 +359,7 @@ export async function POST(req: Request) {
 
     if (rowsData.length === 0) {
       return NextResponse.json({
-        error: 'Tidak ditemukan task teknis (perubahan/fitur/bug fix) pada dokumen ini untuk dimasukkan ke sheet.',
+        error: 'Tidak ditemukan task teknis (perubahan/fitur/bug fix) pada sumber data ini untuk dimasukkan ke sheet.',
         task_lain: taskLain,
       }, { status: 400 });
     }
@@ -378,10 +389,13 @@ export async function POST(req: Request) {
       requestBody: { values: [HEADER_ROW, ...rows] }, // header di baris 1, data mulai baris 2
     });
 
-
     return NextResponse.json({
       success: true,
-      link: `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit#gid=${sheetId}`,
+      link:
+        'https://docs.google.com/spreadsheets/d/' +
+        spreadsheetId +
+        '/edit#gid=' +
+        sheetId,
       sheetTitle,
       count: rowsData.length,
       task_lain: taskLain,

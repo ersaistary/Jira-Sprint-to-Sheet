@@ -366,3 +366,36 @@
 }
 .taskLainList li { margin-bottom: 4px; }
 .taskKode { font-weight: 800; color: #34363d; }
+
+.modeButtons {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.modeButtons button {
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: bold;
+  padding: 6px 12px;
+  border: 2px solid #333;
+  background: #fff;
+  color: #333 !important;        /* paksa warna teks gelap */
+  opacity: 1 !important;         /* lawan opacity rendah dari style global */
+  cursor: pointer;
+  box-shadow: 3px 3px 0 #333;
+}
+
+.modeButtons button:hover:not(:disabled) {
+  transform: translate(-1px, -1px);
+  box-shadow: 4px 4px 0 #333;
+}
+
+.modeButtons button:disabled {
+  background: #ffe9a8;           /* highlight mode aktif */
+  color: #333 !important;
+  opacity: 1 !important;
+  cursor: default;
+  transform: none;
+  box-shadow: 3px 3px 0 #333;
+}

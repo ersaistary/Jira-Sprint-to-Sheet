@@ -2,6 +2,8 @@
 import { useState, useEffect, ChangeEvent } from 'react';
 import styles from './page.module.css';
 
+// Hanya TIPES dan KONSTANTA yang boleh di sini (di luar komponen)
+type SourceMode = 'file' | 'text' | 'jira';
 type TaskLain = { kode: string; judul: string };
 
 const LOADING_MESSAGES = [
@@ -13,6 +15,8 @@ const LOADING_MESSAGES = [
 ];
 
 export default function Home() {
+  const [mode, setMode] = useState<SourceMode>('file');
+  const [sprintCount, setSprintCount] = useState(2);
   const [file, setFile] = useState<File | null>(null);
   const [inputText, setInputText] = useState('');
   const [loading, setLoading] = useState(false);
@@ -47,6 +51,7 @@ export default function Home() {
     if (selectedFile) {
       setFile(selectedFile);
       setInputText('');
+      setMode('file'); // pilih file = otomatis balik ke mode file
     }
   };
 
@@ -59,16 +64,24 @@ export default function Home() {
   };
 
   const handleGenerate = async () => {
-    if (!file && !inputText.trim()) {
-      setError('Upload file dulu (PDF/DOCX/TXT) atau paste teks Jira-nya ya~');
+    if (mode === 'file' && !file) {
+      setError('Pilih file dulu ya~');
       return;
     }
+    if (mode === 'text' && !inputText.trim()) {
+      setError('Paste teks Jira-nya dulu ya~');
+      return;
+    }
+    // mode 'jira' tidak butuh input apa pun — langsung generate
 
     reset();
     setLoading(true);
     try {
       const formData = new FormData();
-      if (file) {
+      if (mode === 'jira') {
+        formData.append('source', 'jira');
+        formData.append('sprintCount', String(sprintCount));
+      } else if (mode === 'file' && file) {
         formData.append('file', file);
       } else {
         formData.append('rawText', inputText);
@@ -108,22 +121,22 @@ export default function Home() {
 
   return (
     <main className={styles.page}>
-      <div className={`${styles.pawPrint} ${styles.ppA}`} />
-      <div className={`${styles.pawPrint} ${styles.ppB}`} />
-      <div className={`${styles.pawPrint} ${styles.ppC}`} />
+      <div className={`styles.pawPrint{styles.pawPrint}styles.pawPrint{styles.ppA}`} />
+      <div className={`styles.pawPrint{styles.pawPrint}styles.pawPrint{styles.ppB}`} />
+      <div className={`styles.pawPrint{styles.pawPrint}styles.pawPrint{styles.ppC}`} />
 
       {loading && (
         <div className={styles.loadingOverlay} role="status" aria-live="polite">
           <div className={styles.loadingCard}>
             <div className={styles.stage}>
-              <div className={styles.cat} style={{ left: `calc(${progress}% - ${progress * 0.7}px)` }}>
+              <div className={styles.cat} style={{ left: `calc(progress{progress}% -progress{progress * 0.7}px)` }}>
                 <div className={styles.catImgWrap}>
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img src="/cat-loading-base.png" alt="" className={styles.catBase} draggable={false} />
                   {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src="/cat-pupil-left.png" alt="" className={`${styles.pupil} ${styles.pupilL}`} draggable={false} />
+                  <img src="/cat-pupil-left.png" alt="" className={`styles.pupil{styles.pupil}styles.pupil{styles.pupilL}`} draggable={false} />
                   {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src="/cat-pupil-right.png" alt="" className={`${styles.pupil} ${styles.pupilR}`} draggable={false} />
+                  <img src="/cat-pupil-right.png" alt="" className={`styles.pupil{styles.pupil}styles.pupil{styles.pupilR}`} draggable={false} />
                 </div>
               </div>
             </div>
@@ -140,55 +153,99 @@ export default function Home() {
 
       <div className={styles.card}>
         <div className={styles.titleRow}>
-          <span className={`${styles.sprite} ${styles.pawprint}`} aria-hidden="true">
+          <span className={`styles.sprite{styles.sprite}styles.sprite{styles.pawprint}`} aria-hidden="true">
             <span className={styles.pad} />
-            <span className={`${styles.toe} ${styles.t1}`} />
-            <span className={`${styles.toe} ${styles.t2}`} />
-            <span className={`${styles.toe} ${styles.t3}`} />
+            <span className={`styles.toe{styles.toe}styles.toe{styles.t1}`} />
+            <span className={`styles.toe{styles.toe}styles.toe{styles.t2}`} />
+            <span className={`styles.toe{styles.toe}styles.toe{styles.t3}`} />
           </span>
           <h1 className={styles.title}>SPRINT ⇢ SHEET</h1>
-          <span className={`${styles.sprite} ${styles.pawprint}`} aria-hidden="true">
+          <span className={`styles.sprite{styles.sprite}styles.sprite{styles.pawprint}`} aria-hidden="true">
             <span className={styles.pad} />
-            <span className={`${styles.toe} ${styles.t1}`} />
-            <span className={`${styles.toe} ${styles.t2}`} />
-            <span className={`${styles.toe} ${styles.t3}`} />
+            <span className={`styles.toe{styles.toe}styles.toe{styles.t1}`} />
+            <span className={`styles.toe{styles.toe}styles.toe{styles.t2}`} />
+            <span className={`styles.toe{styles.toe}styles.toe{styles.t3}`} />
           </span>
         </div>
         <p className={styles.subtitle}>taruh export Jira-mu di sini, biar aku yang beresin 🐾</p>
 
-        {/* Upload */}
-        <div className={`${styles.pixelBox} ${styles.uploadBox}`}>
-          <label className={styles.fileLabel}>
-            <span className={`${styles.sprite} ${styles.folder}`} aria-hidden="true" />
-            <span>PILIH FILE (.pdf / .docx / .txt)</span>
-            <input
-              type="file"
-              accept=".txt,.pdf,.docx,.doc"
-              className={styles.hiddenInput}
-              onChange={handleFileUpload}
-            />
-          </label>
-          {file && (
-            <p className={styles.fileChosen}>📄 {file.name}</p>
+        {/* Pilih sumber data */}
+        <div className={styles.fieldGroup}>
+          <label className={styles.fieldLabel}>sumber data</label>
+          <div className={styles.modeButtons}>
+            <button type="button" onClick={() => setMode('file')} disabled={mode === 'file'}>📁 File</button>
+            <button type="button" onClick={() => setMode('text')} disabled={mode === 'text'}>📝 Paste Teks</button>
+            <button type="button" onClick={() => setMode('jira')} disabled={mode === 'jira'}>⚡ Dari Jira</button>
+          </div>
+
+          {mode === 'jira' && (
+            <label className={styles.hint}>
+              ambil task dari{' '}
+              <select value={sprintCount} onChange={(e) => setSprintCount(Number(e.target.value))}>
+                <option value={1}>1 sprint terakhir</option>
+                <option value={2}>2 sprint terakhir</option>
+              </select>
+            </label>
           )}
         </div>
 
-        <div className={styles.divider}>
-          <span>atau</span>
-        </div>
+        {/* Upload — hanya tampil di mode file */}
+        {mode === 'file' && (
+          <>
+            <div className={`styles.pixelBox{styles.pixelBox}styles.pixelBox{styles.uploadBox}`}>
+              <label className={styles.fileLabel}>
+                <span className={`styles.sprite{styles.sprite}styles.sprite{styles.folder}`} aria-hidden="true" />
+                <span>PILIH FILE (.pdf / .docx / .txt)</span>
+                <input
+                  type="file"
+                  accept=".txt,.pdf,.docx,.doc"
+                  className={styles.hiddenInput}
+                  onChange={handleFileUpload}
+                />
+              </label>
+              {file && (
+                <p className={styles.fileChosen}>📄 {file.name}</p>
+              )}
+            </div>
 
-        {/* Textarea */}
-        <div className={styles.fieldGroup}>
-          <label className={styles.fieldLabel}>paste teks Jira manual</label>
-          <textarea
-            className={`${styles.pixelBox} ${styles.textarea}`}
-            placeholder="paste teks dari Jira di sini..."
-            value={inputText}
-            disabled={!!file}
-            onChange={(e) => setInputText(e.target.value)}
-          />
-          {file && <span className={styles.hint}>hapus file dulu kalau mau paste teks manual~</span>}
-        </div>
+            <div className={styles.divider}>
+              <span>atau</span>
+            </div>
+
+            {/* Textarea di mode file — tetap tampil tapi disabled kalau ada file (perilaku lama) */}
+            <div className={styles.fieldGroup}>
+              <label className={styles.fieldLabel}>paste teks Jira manual</label>
+              <textarea
+                className={`styles.pixelBox{styles.pixelBox}styles.pixelBox{styles.textarea}`}
+                placeholder="paste teks dari Jira di sini..."
+                value={inputText}
+                disabled={!!file}
+                onChange={(e) => setInputText(e.target.value)}
+              />
+              {file && <span className={styles.hint}>hapus file dulu kalau mau paste teks manual~</span>}
+            </div>
+          </>
+        )}
+
+        {/* Textarea standalone — hanya di mode paste teks */}
+        {mode === 'text' && (
+          <div className={styles.fieldGroup}>
+            <label className={styles.fieldLabel}>paste teks Jira manual</label>
+            <textarea
+              className={`styles.pixelBox{styles.pixelBox}styles.pixelBox{styles.textarea}`}
+              placeholder="paste teks dari Jira di sini..."
+              value={inputText}
+              onChange={(e) => setInputText(e.target.value)}
+            />
+          </div>
+        )}
+
+        {/* Mode Jira — info singkat */}
+        {mode === 'jira' && (
+          <div className={styles.fieldGroup}>
+            <span className={styles.hint}>task akan diambil langsung dari project YANLIK via Jira API ⚡</span>
+          </div>
+        )}
 
         <button onClick={handleGenerate} disabled={loading} className={styles.pixelButton}>
           {loading ? (
@@ -204,15 +261,15 @@ export default function Home() {
         </button>
 
         {error && (
-          <div className={`${styles.resultBox} ${styles.errorBox}`}>
-            <span className={`${styles.sprite} ${styles.cross}`} aria-hidden="true" />
+          <div className={`styles.resultBox{styles.resultBox}styles.resultBox{styles.errorBox}`}>
+            <span className={`styles.sprite{styles.sprite}styles.sprite{styles.cross}`} aria-hidden="true" />
             <p>{error}</p>
           </div>
         )}
 
         {link && (
-          <div className={`${styles.resultBox} ${styles.successBox}`}>
-            <span className={`${styles.sprite} ${styles.star}`} aria-hidden="true" />
+          <div className={`styles.resultBox{styles.resultBox}styles.resultBox{styles.successBox}`}>
+            <span className={`styles.sprite{styles.sprite}styles.sprite{styles.star}`} aria-hidden="true" />
             <p>
               selesai! <strong>{count}</strong> task teknis berhasil masuk ke tab baru
               {sheetTitle ? <> "<strong>{sheetTitle}</strong>"</> : ''}.
@@ -224,7 +281,7 @@ export default function Home() {
         )}
 
         {taskLain.length > 0 && (
-          <div className={`${styles.pixelBox} ${styles.taskLainBox}`}>
+          <div className={`styles.pixelBox{styles.pixelBox}styles.pixelBox{styles.taskLainBox}`}>
             <p className={styles.taskLainTitle}>
               🐾 {taskLain.length} task non-teknis (testing/dokumentasi/helpdesk) — tidak dimasukkan ke sheet:
             </p>
