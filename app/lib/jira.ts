@@ -96,6 +96,17 @@ async function getRecentClosedSprints(boardId: number): Promise<Sprint[]> {
 }
 
 
+// Untuk dropdown pemilihan sprint manual: 5 sprint terbaru saja (sudah disortir
+// terbaru duluan oleh getRecentClosedSprints), cukup id/name/state ke browser.
+export async function getRecentSprints(): Promise<
+  { id: number; name: string; state: string }[]
+> {
+  const boardId = await findBoardId();
+  const sprints = await getRecentClosedSprints(boardId);
+  return sprints.slice(0, 5).map((s) => ({ id: s.id, name: s.name, state: s.state }));
+}
+
+
 type JiraIssue = {
   key: string;
   fields: {
@@ -204,6 +215,103 @@ async function searchIssues(jql: string): Promise<JiraIssue[]> {
 }
 
 
+/**
+ * Ambil issue dari SATU sprint by ID + render jadi satu blok teks
+ * (format mirip export Jira per-issue). Dipakai ulang oleh
+ * fetchRecentSprintIssues dan fetchIssuesBySprintIds.
+ */
+async function fetchIssuesFromSprint(sprint: Sprint): Promise<string> {
+  console.log(
+    '[Jira] Mengambil issue dari sprint "' + sprint.name + '" (' + sprint.state + ')...'
+  );
+  const jql =
+    'project = ' + PROJECT_KEY + ' AND sprint = ' + sprint.id + ' ORDER BY created ASC';
+  const issues = await searchIssues(jql);
+  console.log('[Jira] Sprint "' + sprint.name + '": ' + issues.length + ' issue');
+
+  const parts: string[] = [];
+  for (let i = 0; i < issues.length; i++) {
+    const issue = issues[i];
+    const f = issue.fields;
+
+    let commentsText = '';
+    const comments = (f.comment && f.comment.comments) ?? [];
+    for (let c = 0; c < comments.length; c++) {
+      const author = comments[c]?.author?.displayName || '?';
+      const body = extractText(comments[c].body).trim();
+      if (body.length > 3) {
+        commentsText += '[' + author + ']: ' + body + '\n';
+      }
+    }
+
+    let block = '';
+    block += 'Task: [' + issue.key + '] ' + f.summary + '\n';
+    block += 'Status: ' + ((f.status && f.status.name) || '') + '\n';
+    block += 'Created: ' + formatDate(f.created) + '\n';
+    if (f.resolutiondate) {
+      block += 'Resolved: ' + formatDate(f.resolutiondate) + '\n';
+    }
+    const assigneeName =
+      (f.assignee && (f.assignee.displayName || f.assignee.name)) || 'Unassigned';
+    block += 'Assignee: ' + assigneeName + '\n';
+    block += 'Priority: ' + ((f.priority && f.priority.name) || '') + '\n';
+    if (f.description) {
+      block += 'Description:\n' + extractText(f.description).trim() + '\n';
+    }
+    if (commentsText.trim()) {
+      block += 'Comments:\n' + commentsText.trim() + '\n';
+    }
+
+    parts.push(block.trim());
+  }
+
+  return parts.join('\n\n');
+}
+
+// Cari objek sprint lengkap berdasarkan ID dari daftar 5 sprint terbaru.
+// Kalau ID tidak ada di daftar (mis. sprint terlalu lama), tetap bisa dipakai —
+// cukup dibungkus jadi objek minimal.
+async function resolveSprintsByIds(sprintIds: number[]): Promise<Sprint[]> {
+  const all = await getRecentClosedSprints(await findBoardId());
+  const resolved: Sprint[] = [];
+  for (let i = 0; i < sprintIds.length; i++) {
+    const found = all.find((s) => s.id === sprintIds[i]);
+    if (found) {
+      resolved.push(found);
+    } else {
+      // Sprint ada di Jira tapi tidak masuk 5 terbaru — tetap coba ambil issue-nya
+      resolved.push({ id: sprintIds[i], name: 'Sprint ' + sprintIds[i], state: 'unknown' });
+    }
+  }
+  return resolved;
+}
+
+/**
+ * Ambil issue dari sprint-sprint tertentu (by ID, max 2) + render jadi teks.
+ * Untuk mode pemilihan sprint manual di UI.
+ */
+export async function fetchIssuesBySprintIds(sprintIds: number[]): Promise<string> {
+  if (sprintIds.length === 0 || sprintIds.length > 2) {
+    throw new Error('Pilih 1 atau 2 sprint saja.');
+  }
+
+  const sprints = await resolveSprintsByIds(sprintIds);
+  console.log(
+    '[Jira] Sprint terpilih (manual): ' +
+      sprints.map((sp) => sp.name + ' (id=' + sp.id + ')').join(', ')
+  );
+
+  const parts: string[] = [];
+  for (let i = 0; i < sprints.length; i++) {
+    parts.push(await fetchIssuesFromSprint(sprints[i]));
+  }
+
+  const result = parts.join('\n\n');
+  console.log(
+    '[Jira] Total teks terkumpul: ' + result.length + ' karakter dari ' + sprints.length + ' sprint'
+  );
+  return result;
+}
 
 /**
  * Ambil issue dari N sprint terakhir + render jadi teks ringkas
@@ -214,59 +322,15 @@ export async function fetchRecentSprintIssues(sprintCount: number = 2): Promise<
   const sprints = (await getRecentClosedSprints(boardId)).slice(0, sprintCount);
   console.log(
     '[Jira] Sprint terpilih: ' + sprints.map((sp) => sp.name + ' (id=' + sp.id + ')').join(', ')
-    );
-
+  );
 
   if (sprints.length === 0) {
     throw new Error('Tidak ada sprint closed yang ditemukan pada board ini.');
   }
 
   const parts: string[] = [];
-
   for (let s = 0; s < sprints.length; s++) {
-    const sprint = sprints[s];
-    console.log(
-      '[Jira] Mengambil issue dari sprint "' + sprint.name + '" (' + sprint.state + ')...'
-    );
-    const jql =
-      'project = ' + PROJECT_KEY + ' AND sprint = ' + sprint.id + ' ORDER BY created ASC';
-    const issues = await searchIssues(jql);
-    console.log('[Jira] Sprint "' + sprint.name + '": ' + issues.length + ' issue');
-
-    for (let i = 0; i < issues.length; i++) {
-      const issue = issues[i];
-      const f = issue.fields;
-
-      let commentsText = '';
-      const comments = (f.comment && f.comment.comments) ?? [];
-      for (let c = 0; c < comments.length; c++) {
-        const author = comments[c]?.author?.displayName || '?';
-        const body = extractText(comments[c].body).trim();
-        if (body.length > 3) {
-          commentsText += '[' + author + ']: ' + body + '\n';
-        }
-      }
-
-      let block = '';
-      block += 'Task: [' + issue.key + '] ' + f.summary + '\n';
-      block += 'Status: ' + ((f.status && f.status.name) || '') + '\n';
-      block += 'Created: ' + formatDate(f.created) + '\n';
-      if (f.resolutiondate) {
-        block += 'Resolved: ' + formatDate(f.resolutiondate) + '\n';
-      }
-      const assigneeName =
-        (f.assignee && (f.assignee.displayName || f.assignee.name)) || 'Unassigned';
-      block += 'Assignee: ' + assigneeName + '\n';
-      block += 'Priority: ' + ((f.priority && f.priority.name) || '') + '\n';
-      if (f.description) {
-        block += 'Description:\n' + extractText(f.description).trim() + '\n';
-      }
-      if (commentsText.trim()) {
-        block += 'Comments:\n' + commentsText.trim() + '\n';
-      }
-
-      parts.push(block.trim());
-    }
+    parts.push(await fetchIssuesFromSprint(sprints[s]));
   }
 
   const result = parts.join('\n\n');

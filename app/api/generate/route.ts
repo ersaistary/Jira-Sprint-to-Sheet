@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server';
 import { GoogleGenAI } from '@google/genai';
 import { google } from 'googleapis';
-import { fetchRecentSprintIssues } from '../../lib/jira';
+import { fetchRecentSprintIssues, fetchIssuesBySprintIds } from '../../lib/jira';
+
 
 // --- Gemini client (new unified SDK) ---
 // @google/generative-ai is deprecated (google-gemini/deprecated-generative-ai-js).
@@ -236,6 +237,93 @@ Kembalikan HANYA JSON (tanpa markdown, tanpa teks lain) dengan struktur persis:
 ${rawText}`;
 }
 
+// Pecah teks sprint menjadi chunk per-task (pemisah antar task = "\n\nTask: ")
+function splitIntoChunks(text: string, maxChunkChars: number): string[] {
+  const blocks = text.split('\n\n');
+  const chunks: string[] = [];
+  let current = '';
+
+  for (let i = 0; i < blocks.length; i++) {
+    const block = blocks[i];
+    // Kalau current + block masih muat, gabung
+    if (current.length + block.length + 2 <= maxChunkChars) {
+      current = current ? current + '\n\n' + block : block;
+    } else {
+      if (current) chunks.push(current);
+      // kalau satu blok sendirian sudah lebih panjang dari limit, tetap masukkan sendiri
+      current = block;
+    }
+  }
+  if (current) chunks.push(current);
+
+  // Pastikan setiap chunk dimulai dari "Task:" biar formatnya utuh
+  return chunks;
+}
+
+// Gabungkan beberapa hasil JSON dari AI jadi satu
+function mergeParsedResults(results: { perubahan_teknis?: any[]; task_lain?: any[] }[]) {
+  const perubahan: any[] = [];
+  const lain: any[] = [];
+  for (let i = 0; i < results.length; i++) {
+    if (results[i].perubahan_teknis) perubahan.push(...results[i].perubahan_teknis!);
+    if (results[i].task_lain) lain.push(...results[i].task_lain!);
+  }
+  return { perubahan_teknis: perubahan, task_lain: lain };
+}
+
+// Proses teks panjang dengan membagi ke beberapa panggilan AI, lalu merge hasilnya
+async function generateWithBatching(compactText: string) {
+  // ~50 ribu karakter per chunk ≈ aman dari MAX_TOKENS (32768 output) sekaligus
+  // mengurangi jumlah panggilan. 2 sprint (144k) jadi ~3 panggilan.
+  const MAX_CHUNK_CHARS = 50000;
+
+  const chunks = splitIntoChunks(compactText, MAX_CHUNK_CHARS);
+  console.log('[Server] Teks dibagi menjadi ' + chunks.length + ' batch untuk diproses AI');
+
+  const results: { perubahan_teknis?: any[]; task_lain?: any[] }[] = [];
+
+  for (let i = 0; i < chunks.length; i++) {
+    console.log('[Server] Memproses batch ' + (i + 1) + '/' + chunks.length + ' (' + chunks[i].length + ' karakter)...');
+
+    const prompt = buildPrompt(chunks[i]);
+    const result = await ai.models.generateContent({
+      model: MODEL_NAME,
+      contents: prompt,
+      config: {
+        responseMimeType: 'application/json',
+        temperature: 0.2,
+        maxOutputTokens: 32768,
+      },
+    });
+
+    const finishReason = result.candidates?.[0]?.finishReason;
+    let textResult = (result.text ?? '').trim();
+
+    if (textResult.startsWith('```json')) {
+      textResult = textResult.replace(/^```json/, '').replace(/```$/, '').trim();
+    } else if (textResult.startsWith('```')) {
+      textResult = textResult.replace(/^```/, '').replace(/```$/, '').trim();
+    }
+
+    let parsed: { perubahan_teknis?: any[]; task_lain?: any[] } | null = null;
+    try {
+      parsed = JSON.parse(textResult);
+    } catch {
+      parsed = tryRepairTruncatedJson(textResult);
+    }
+
+    if (!parsed) {
+      throw new Error('Batch ' + (i + 1) + '/' + chunks.length + ' mengembalikan JSON tidak valid (finishReason: ' + finishReason + '). Coba lagi.');
+    }
+
+    console.log('[Server] Batch ' + (i + 1) + ' selesai: ' + (parsed.perubahan_teknis?.length || 0) + ' teknis, ' + (parsed.task_lain?.length || 0) + ' lain');
+    results.push(parsed);
+  }
+
+  return mergeParsedResults(results);
+}
+
+
 export async function POST(req: Request) {
   try {
     const formData = await req.formData();
@@ -247,9 +335,17 @@ export async function POST(req: Request) {
 
     // 0. Mode baru: ambil task langsung dari Jira REST API (1-2 sprint terakhir)
     if (source === 'jira') {
-      const sprintCount = parseInt(formData.get('sprintCount') as string || '2', 10);
-      console.log(`[Server] Mengambil task dari Jira API (${sprintCount} sprint terakhir)...`);
-      textToProcess = await fetchRecentSprintIssues(sprintCount);
+      // Mode baru: sprint dipilih manual (array ID), fallback ke N terakhir
+      const sprintIdsRaw = formData.get('sprintIds') as string | null;
+      if (sprintIdsRaw) {
+        const sprintIds = JSON.parse(sprintIdsRaw) as number[];
+        console.log('[Server] Mengambil task dari sprint terpilih: ' + sprintIds.join(', '));
+        textToProcess = await fetchIssuesBySprintIds(sprintIds);
+      } else {
+        const sprintCount = parseInt(formData.get('sprintCount') as string || '2', 10);
+        console.log('[Server] Mengambil task dari Jira API (' + sprintCount + ' sprint terakhir)...');
+        textToProcess = await fetchRecentSprintIssues(sprintCount);
+      }
       console.log('[Server] Preview teks dari Jira:', textToProcess.slice(0, 500));
     }
     // 1. Ekstraksi teks berdasarkan input (File atau Textarea)
@@ -295,64 +391,8 @@ export async function POST(req: Request) {
     const compactText = compactJiraText(textToProcess);
     console.log('[Server] Panjang teks setelah dipangkas:', compactText.length, '(dari', textToProcess.trim().length, ')');
 
-    const prompt = buildPrompt(compactText);
-
-    const result = await ai.models.generateContent({
-      model: MODEL_NAME,
-      contents: prompt,
-      config: {
-        responseMimeType: 'application/json',
-        temperature: 0.2,
-        // Token thinking (reasoning internal model) juga dipotong dari budget ini,
-        // jadi harus jauh lebih besar dari perkiraan panjang JSON output supaya
-        // hasil akhirnya tidak terpotong di tengah jalan.
-        maxOutputTokens: 32768,
-      },
-    });
-
-    const finishReason = result.candidates?.[0]?.finishReason;
-    if (finishReason === 'MAX_TOKENS') {
-      console.error('[Server] Respons AI terpotong (MAX_TOKENS). Panjang teks:', compactText.length);
-      return NextResponse.json({
-        error: 'Data terlalu panjang untuk diproses sekali jalan (respons AI terpotong). Kalau pakai mode Jira, coba pilih 1 sprint saja. Untuk file, coba split jadi beberapa bagian lebih kecil.',
-      }, { status: 502 });
-    }
-
-    let textResult = (result.text ?? '').trim();
-
-    // Fallback pembersihan kalau model tetap membungkus dengan ```json
-    if (textResult.startsWith('```json')) {
-      textResult = textResult.replace(/^```json/, '').replace(/```$/, '').trim();
-    } else if (textResult.startsWith('```')) {
-      textResult = textResult.replace(/^```/, '').replace(/```$/, '').trim();
-    }
-
-    if (!textResult) {
-      return NextResponse.json({
-        error: 'AI tidak mengembalikan hasil apapun. Coba lagi, atau periksa apakah GEMINI_API_KEY masih valid.'
-      }, { status: 502 });
-    }
-
-    let parsed: { perubahan_teknis?: any[]; task_lain?: any[] };
-    try {
-      parsed = JSON.parse(textResult);
-    } catch (e) {
-      console.error('[Server] Gagal parse JSON dari AI. finishReason:', finishReason);
-      console.error('[Server] 500 karakter akhir respons:', textResult.slice(-500));
-
-      // Percobaan terakhir: kalau JSON terpotong tepat di tengah array task_lain/
-      // perubahan_teknis, coba tutup paksa supaya task yang sudah lengkap tetap
-      // bisa dipakai, daripada semuanya gagal total.
-      const repaired = tryRepairTruncatedJson(textResult);
-      if (repaired) {
-        console.warn('[Server] JSON berhasil diperbaiki otomatis (sebagian data mungkin hilang di ujung).');
-        parsed = repaired;
-      } else {
-        return NextResponse.json({
-          error: 'AI mengembalikan format yang tidak valid. Coba generate ulang; kalau berulang terjadi, coba dengan data yang lebih pendek.',
-        }, { status: 502 });
-      }
-    }
+    // 3. Panggil AI — otomatis dipecah per batch kalau teks kepanjangan
+    const parsed = await generateWithBatching(compactText);
 
     const rowsData = parsed.perubahan_teknis ?? [];
     const taskLain = parsed.task_lain ?? [];
