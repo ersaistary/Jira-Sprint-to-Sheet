@@ -5,6 +5,20 @@ import styles from './page.module.css';
 // Hanya TIPES dan KONSTANTA yang boleh di sini (di luar komponen)
 type SourceMode = 'file' | 'text' | 'jira';
 type TaskLain = { kode: string; judul: string };
+type Row = {
+  kode_perubahan: string;
+  tanggal_mulai: string;
+  tanggal_selesai: string;
+  pelaksana: string;
+  lokasi: string;
+  status_perubahan: string;
+  inisiasi: string;
+  detail: string;
+  hasil: string;
+  dampak: string;
+  keterangan: string;
+  status: string;
+};
 type SprintOption = { id: number; name: string; state: string };
 
 const LOADING_MESSAGES = [
@@ -29,6 +43,11 @@ export default function Home() {
   const [sheetTitle, setSheetTitle] = useState('');
   const [taskLain, setTaskLain] = useState<TaskLain[]>([]);
   const [error, setError] = useState('');
+  const [reIncludeKeys, setReIncludeKeys] = useState<string[]>([]);
+  const [rows, setRows] = useState<Row[]>([]);
+  const [pendingCommit, setPendingCommit] = useState(false);
+  const [committedSheet, setCommittedSheet] = useState('');
+
 
   // Progress asli dari API generateContent tidak bisa di-stream per-persen, jadi kita
   // simulasikan progres yang naik cepat lalu melambat mendekati 92% sambil menunggu
@@ -75,6 +94,8 @@ export default function Home() {
     setSheetTitle('');
     setTaskLain([]);
     setError('');
+    setRows([]);
+    setCommittedSheet('');
   };
 
   const toggleSprint = (id: number) => {
@@ -83,6 +104,15 @@ export default function Home() {
       if (prev.length >= 2) return prev; // max 2 sprint
       return [...prev, id];
     });
+  };
+
+  const toggleReInclude = (kode: string) => {
+    if (rows.length > 0 && !confirm('Regenerate akan mengganti semua baris di tabel preview (editan kamu hilang). Lanjut?')) {
+      return;
+    }
+    setReIncludeKeys((prev) =>
+      prev.includes(kode) ? prev.filter((k) => k !== kode) : [...prev, kode]
+    );
   };
 
   const handleGenerate = async () => {
@@ -107,11 +137,18 @@ export default function Home() {
         } else {
           formData.append('sprintCount', '2'); // fallback: 2 sprint terakhir
         }
+        if (reIncludeKeys.length > 0) {
+          formData.append('reInclude', JSON.stringify(reIncludeKeys));
+        }
       } else if (mode === 'file' && file) {
         formData.append('file', file);
       } else {
         formData.append('rawText', inputText);
       }
+
+      // reset checkbox re-include SETELAH formData tersusun, biar nilai yang
+      // terkirim masih utuh
+      setReIncludeKeys([]);
 
       const res = await fetch('/api/generate', {
         method: 'POST',
@@ -126,9 +163,13 @@ export default function Home() {
       await new Promise((r) => setTimeout(r, 450));
 
       if (data.success) {
-        setLink(data.link);
-        setCount(data.count || 0);
-        setSheetTitle(data.sheetTitle || '');
+        if (data.success) {
+          setRows(data.rows || []);
+          setTaskLain(data.task_lain || []);
+        } else {
+          setError(data.error || 'Terjadi kesalahan pada sistem.');
+          setTaskLain(data.task_lain || []);
+        }
         setTaskLain(data.task_lain || []);
       } else {
         setError(data.error || 'Terjadi kesalahan pada sistem.');
@@ -144,6 +185,42 @@ export default function Home() {
       setProgress(0);
     }
   };
+
+    const updateRow = (idx: number, field: keyof Row, value: string) => {
+    setRows((prev) => prev.map((r, i) => (i === idx ? { ...r, [field]: value } : r)));
+  };
+
+  const deleteRow = (idx: number) => {
+    setRows((prev) => prev.filter((_, i) => i !== idx));
+  };
+
+  const handleCommit = async () => {
+    if (rows.length === 0) return;
+    setPendingCommit(true);
+    setError('');
+    try {
+      const res = await fetch('/api/commit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rows, existingSheetTitle: committedSheet || null }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setLink(data.link);
+        setSheetTitle(data.sheetTitle);
+        setCount(data.count);
+        setCommittedSheet(data.sheetTitle); // commit berikutnya = overwrite tab ini
+      } else {
+        setError(data.error || 'Gagal menulis ke Sheets.');
+      }
+    } catch (err) {
+      console.error(err);
+      setError('Gagal terhubung ke server saat commit.');
+    } finally {
+      setPendingCommit(false);
+    }
+  };
+
 
   return (
     <main className={styles.page}>
@@ -329,15 +406,92 @@ export default function Home() {
             <p className={styles.taskLainTitle}>
               🐾 {taskLain.length} task non-teknis (testing/dokumentasi/helpdesk) — tidak dimasukkan ke sheet:
             </p>
+            <p className={styles.hint}>
+              ada yang keliru? centang task yang seharusnya masuk, lalu klik generate lagi.
+            </p>
             <ul className={styles.taskLainList}>
               {taskLain.map((t, i) => (
                 <li key={i}>
-                  <span className={styles.taskKode}>{t.kode}</span> — {t.judul}
+                  <label style={{ cursor: 'pointer', display: 'block' }}>
+                    <input
+                      type="checkbox"
+                      checked={reIncludeKeys.includes(t.kode)}
+                      onChange={() => toggleReInclude(t.kode)}
+                    />{' '}
+                    <span className={styles.taskKode}>{t.kode}</span> — {t.judul}
+                  </label>
+                  {reIncludeKeys.length > 0 && (
+                  <button
+                    onClick={handleGenerate}
+                    disabled={loading}
+                    className={styles.pixelButton}
+                    style={{ marginTop: '8px', fontSize: '12px', padding: '10px' }}
+                  >
+                    {loading ? 'MENGGENERATE ULANG...' : `GENERATE ULANG (${reIncludeKeys.length} task di-include) ⚡`}
+                  </button>
+            )}
                 </li>
               ))}
             </ul>
+            
+
           </div>
         )}
+
+        {rows.length > 0 && (
+          <div className={styles.pixelBox + ' ' + styles.previewBox}>
+            <p className={styles.taskLainTitle}>
+              📋 preview — {rows.length} baris siap masuk sheet. klik sel untuk edit, hapus baris yang tidak perlu.
+            </p>
+            <div className={styles.previewTableWrap}>
+              <table className={styles.previewTable}>
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>Kode Perubahan</th>
+                    <th>Tgl Mulai</th>
+                    <th>Tgl Selesai</th>
+                    <th>Pelaksana</th>
+                    <th>Lokasi</th>
+                    <th>Status Perubahan</th>
+                    <th>Inisiasi</th>
+                    <th>Detail</th>
+                    <th>Hasil</th>
+                    <th>Dampak</th>
+                    <th>Keterangan</th>
+                    <th>Status</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((r, i) => (
+                    <tr key={i}>
+                      <td>{i + 1}</td>
+                      {(Object.keys(r) as (keyof Row)[]).map((k) => (
+                        <td key={k}>
+                          <input
+                            value={r[k] || ''}
+                            onChange={(e) => updateRow(i, k, e.target.value)}
+                            className={styles.cellInput}
+                          />
+                        </td>
+                      ))}
+                      <td>
+                        <button type="button" onClick={() => deleteRow(i)} className={styles.deleteRowBtn}>
+                          ✕
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <button onClick={handleCommit} disabled={pendingCommit} className={styles.pixelButton}>
+              {pendingCommit ? 'MENULIS KE SHEETS...' : 'TULIS KE SHEETS ⚡'}
+            </button>
+          </div>
+        )}
+
       </div>
     </main>
   );

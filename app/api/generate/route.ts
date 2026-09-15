@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { GoogleGenAI } from '@google/genai';
-import { google } from 'googleapis';
-import { fetchRecentSprintIssues, fetchIssuesBySprintIds } from '../../lib/jira';
+import { fetchRecentSprintIssues, fetchIssuesBySprintIds, fetchIssuesByKeys } from '../../lib/jira';
+
 
 
 // --- Gemini client (new unified SDK) ---
@@ -90,68 +90,7 @@ function tryRepairTruncatedJson(text: string): { perubahan_teknis?: any[]; task_
 // Beberapa task Jira nampilin username mentah (bukan nama tampilan) sebagai
 // Reporter/Assignee. Petakan di sini biar hasil di sheet selalu pakai nama lengkap.
 // Tinggal tambah baris baru kalau ketemu username lain yang belum ke-cover.
-const NAME_MAP: Record<string, string> = {
-  tinoimammp: 'Tino Imam Maulana',
-};
 
-function normalizeName(name: string): string {
-  const trimmed = (name || '').trim();
-  const key = trimmed.toLowerCase();
-  return NAME_MAP[key] || trimmed;
-}
-
-const HEADER_ROW = [
-  'Kode Perubahan', 'Kegiatan Perubahan', 'Deskripsi Singkat',
-  'Tanggal Mulai', 'Tahun/Bulan Mulai', 'Tanggal Selesai', 'Tahun/Bulan Selesai',
-  'Nama Tim/Pokja', 'Nama Tim Fokus', 'Pelaksana', 'Lokasi/Sistem/CI/Layanan Terkait',
-  'Status Perubahan', 'Inisiasi Perubahan', 'Detail Perubahan', 'Hasil/Output',
-  'Dampak Realisasi', 'Dokumentasi', 'Keterangan', 'Status',
-];
-
-function makeSheetTitle(): string {
-  const now = new Date();
-  const d = now.toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' });
-  const t = now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
-  // Karakter : / \ ? * [ ] tidak boleh dipakai di nama tab Google Sheets
-  const raw = 'Sprint ' + d + ' ' + t;
-  return raw.replace(/[:/\\?*[\]]/g, '.');
-}
-
-
-async function createNewSheetTab(
-  sheets: ReturnType<typeof google.sheets>,
-  spreadsheetId: string
-): Promise<{ sheetTitle: string; sheetId: number }> {
-  let title = makeSheetTitle();
-  let attempt = 0;
-
-  // Kalau nama tab kebetulan sudah ada (generate 2x dalam detik yang sama), retry
-  // dengan suffix, maksimal beberapa kali.
-  while (attempt < 5) {
-    try {
-      const res = await sheets.spreadsheets.batchUpdate({
-        spreadsheetId,
-        requestBody: {
-          requests: [{ addSheet: { properties: { title } } }],
-        },
-      });
-      const sheetId = res.data.replies?.[0]?.addSheet?.properties?.sheetId;
-      if (sheetId === undefined || sheetId === null) {
-        throw new Error('Gagal mendapatkan sheetId dari tab baru.');
-      }
-      return { sheetTitle: title, sheetId };
-    } catch (err: any) {
-      const message = err?.errors?.[0]?.message || err?.message || '';
-      if (message.toLowerCase().includes('already exists')) {
-        attempt += 1;
-        title = makeSheetTitle() + ' (' + (attempt + 1) + ')';
-        continue;
-      }
-      throw err;
-    }
-  }
-  throw new Error('Gagal membuat tab sheet baru setelah beberapa percobaan.');
-}
 
 function buildPrompt(rawText: string): string {
   return `Kamu adalah asisten yang mengubah export task Jira (sprint report) menjadi data terstruktur untuk dokumen Change Log / Sprint Report perusahaan.
@@ -174,6 +113,10 @@ ${DAFTAR_KODE_PERUBAHAN}
   7. JDIH
   8. Simponi Gateway
   Cara menentukan: lihat tag di awal judul task (mis. "[Seleksi] Pendampingan...", "[OSSHUB] Upgrade...", "[JDIH] Perbaikan...", "[ShortUrl] Isu edit..."), lalu petakan ke daftar baku di atas (case-insensitive, abaikan variasi ejaan/spasi) — contoh: "OSS", "Oss", "OSSHUB", "Oss Hub" semua -> "OSS Hub"; "shorturl", "ShortUrl" -> "ShortURL"; "seleksi" -> "Seleksi". Kalau tidak ada tag di judul, simpulkan dari konteks/isi Description mana dari 8 sistem di atas yang paling relevan. Kalau benar-benar tidak bisa disimpulkan sama sekali dari salah satu 8 sistem itu, baru kosongkan.
+  Catatan khusus task infrastruktur/database/server: kalau kerja fisiknya pada infrastruktur yang mendukung salah satu dari 8 sistem (mis. pembuatan user database JDIH, partisi tabel database aplikasi, instalasi monitoring di server aplikasi), task itu TETAP masuk "perubahan_teknis" dan lokasi diisi sistem aplikasi yang didukungnya. Contoh: "Pembuatan User Read-Only Database JDIH Production untuk akses Metabase" -> lokasi "JDIH", karena perubahannya dilakukan pada database JDIH, bukan di dalam Metabase.
+  PENTING: Metabase, Grafana, dan Prometheus adalah tool terpisah di LUAR 8 sistem — task yang kerja fisiknya di dalam tool-tool itu tidak punya lokasi yang valid dan masuk "task_lain".
+
+
 - status_perubahan: dropdown, HANYA salah satu dari "Planned" | "In Progress" | "Closed".
   - Planned = jika status Jira "To Do"
   - In Progress = jika status Jira sedang dikerjakan (In Progress, Review, dsb, belum selesai)
@@ -200,10 +143,20 @@ PENTING soal field kosong: jika suatu field memang tidak perlu/tidak ada datanya
 Task yang MASUK ke "perubahan_teknis" HANYA task yang sifatnya perubahan/update teknis pada sistem/aplikasi: perbaikan bug, penambahan/pengubahan fitur, perubahan akses/akun, migrasi data, update konfigurasi/keamanan, dsb.
 
 Task yang TIDAK masuk ke "perubahan_teknis" (masukkan ke "task_lain" saja, cukup kode dan judul):
-- Task testing / QA regression (mis. judul mengandung "Testing", atau deskripsinya berisi daftar link testing task lain)
+- Task testing / QA / pengujian dalam bentuk apapun: QA regression, load testing, stress testing, performance testing, penetration testing, security testing, uji petik, smoke testing, UAT, maupun pendampingan eksekusi test — di mana pun kata kuncinya berada di judul (awal/tengah/akhir). Contoh: "Testing JDIH task 2858 & 2861", "[Seleksi] Load Testing". Task testing TIDAK PERNAH masuk perubahan_teknis walaupun deskripsinya menyebut sistem/aplikasi spesifik.
 - SEMUA task yang judulnya diawali tag "[Helpdesk]" — task Helpdesk TIDAK PERNAH masuk ke perubahan_teknis, walaupun isi deskripsinya terdengar teknis (misalnya "perubahan alamat", "update data", dll). Cek tag di awal judul, bukan isi kontennya.
-- Task dokumentasi/administratif yang bukan perubahan sistem: pembuatan undangan, laporan rapat/koordinasi, nota dinas, surat, dsb.
+- Task dokumentasi/administratif yang bukan perubahan sistem: pembuatan undangan, laporan rapat/koordinasi, nota dinas, surat, monthly report, cover, dokumen regulasi/kepatuhan, matriks UAM/ITSR, formulir administrasi rilis, dsb.
 - Task pendampingan/koordinasi non-teknis.
+- Task desain NON-SISTEM: desain konten publikasi/campaign (cover, infografis sosialisasi, banner publikasi, logo event) yang targetnya bukan aplikasi/sistem dari daftar lokasi.
+- Task yang dikerjakan DI DALAM tool BI Metabase: pembuatan/edit dashboard, chart, visualisasi, query, atau koleksi Metabase. Metabase adalah tool analitik di luar 8 sistem aplikasi, jadi perubahan di dalamnya bukan perubahan aplikasi. Pembeda pentingnya: kalau kerjanya pada DATABASE/server/aplikasi (mis. membuat user DB agar bisa diakses Metabase, mempartisi tabel database), itu TETAP masuk "perubahan_teknis" — yang keluar ke "task_lain" HANYA kalau kerjanya dilakukan di dalam Metabase itu sendiri (dashboard/query/chart).
+
+ATURAN KHUSUS TASK DESAIN UI/UX DAN TAMPILAN APLIKASI (SANGAT PENTING, JANGAN SALAH KLASIFIKASI):
+Task desain yang targetnya adalah aplikasi/sistem (Web Komdigi, Backoffice, OSS Hub, Portal Layanan Publik, Kosmo, Portal Komdigi, dll) ADALAH PERUBAHAN TEKNIS dan WAJIB masuk ke "perubahan_teknis". Contoh yang MASUK (bukan task_lain):
+- "Desain UI/UX Tampilan Data Monev Pengadaan (...)" -> pembangunan tampilan baru di aplikasi -> perubahan_teknis (PS-03-00-007)
+- "Onboarding screen", "Offline screen", "Error state on Login screen" -> pembangunan/perbaikan tampilan aplikasi -> perubahan_teknis
+- "Tampilan Check in & Check out Pada Dashboard Portal" -> perubahan tampilan dashboard aplikasi -> perubahan_teknis
+- "Revisi Logo <nama aplikasi/sistem>" -> perubahan aset visual di dalam aplikasi -> perubahan_teknis (PS-03-00-005)
+Cara membedakannya: kalau output desain tersebut akan DIIMPLEMENTASIKAN/di-render di dalam salah satu sistem di daftar lokasi, itu teknis. Kalau outputnya hanya file gambar/dokumen untuk publikasi, laporan, atau keperluan administratif di luar aplikasi, itu non-teknis. Kehadiran tag sistem di judul (mis. [Web Komdigi], [Kosmo], [Portal Komdigi]) adalah petanda kuat task tersebut teknis.
 
 Sebelum memutuskan sebuah task masuk "perubahan_teknis", cek DUA hal secara berurutan:
 1. Apakah judulnya diawali tag [Helpdesk], [Dokumentasi], atau sejenisnya yang menandakan non-teknis? Kalau ya -> langsung ke "task_lain", JANGAN dipertimbangkan lagi meskipun isinya terdengar teknis.
@@ -346,6 +299,18 @@ export async function POST(req: Request) {
         console.log('[Server] Mengambil task dari Jira API (' + sprintCount + ' sprint terakhir)...');
         textToProcess = await fetchRecentSprintIssues(sprintCount);
       }
+            // Re-include: task yang user centang dari daftar task_lain sebelumnya
+      const reIncludeRaw = formData.get('reInclude') as string | null;
+      if (reIncludeRaw) {
+        const keys = JSON.parse(reIncludeRaw) as string[];
+        if (Array.isArray(keys) && keys.length > 0) {
+          console.log('[Server] Re-include task: ' + keys.join(', '));
+          const extraText = await fetchIssuesByKeys(keys);
+          if (extraText) {
+            textToProcess = extraText + '\n\n' + textToProcess;
+          }
+        }
+      }
       console.log('[Server] Preview teks dari Jira:', textToProcess.slice(0, 500));
     }
     // 1. Ekstraksi teks berdasarkan input (File atau Textarea)
@@ -405,42 +370,20 @@ export async function POST(req: Request) {
     }
 
     // 3. Hubungkan ke Google Sheets API
-    const auth = new google.auth.GoogleAuth({
-      credentials: JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON!),
-      scopes: ['https://www.googleapis.com/auth/spreadsheets'],
-    });
+    if (rowsData.length === 0) {
+      return NextResponse.json({
+        error: 'Tidak ditemukan task teknis (perubahan/fitur/bug fix) pada sumber data ini untuk dimasukkan ke sheet.',
+        task_lain: taskLain,
+      }, { status: 400 });
+    }
 
-    const sheets = google.sheets({ version: 'v4', auth });
-    const spreadsheetId = process.env.SPREADSHEET_ID;
-
-    const rows = rowsData.map((item: any) => [
-      item.kode_perubahan || '', '', '', item.tanggal_mulai || '', '', item.tanggal_selesai || '', '', '', '',
-      item.pelaksana ? normalizeName(item.pelaksana) : '', item.lokasi || '', item.status_perubahan || '', item.inisiasi || '', item.detail || '',
-      item.hasil || '', item.dampak || '', '', item.keterangan || '', item.status || ''
-    ]);
-
-    // Setiap generate = tab (sheet) baru, jadi data lama tidak pernah ketimpa.
-    const { sheetTitle, sheetId } = await createNewSheetTab(sheets, spreadsheetId!);
-
-    await sheets.spreadsheets.values.update({
-      spreadsheetId,
-      range: `'${sheetTitle}'!A1`,
-      valueInputOption: 'USER_ENTERED',
-      requestBody: { values: [HEADER_ROW, ...rows] }, // header di baris 1, data mulai baris 2
-    });
-
+    // TIDAK langsung tulis ke Sheets — kembalikan data ke UI untuk preview & edit.
+    // Penulisan dilakukan /api/commit setelah user review.
     return NextResponse.json({
       success: true,
-      link:
-        'https://docs.google.com/spreadsheets/d/' +
-        spreadsheetId +
-        '/edit#gid=' +
-        sheetId,
-      sheetTitle,
-      count: rowsData.length,
+      rows: rowsData,
       task_lain: taskLain,
     });
-
   } catch (error: any) {
     console.error('Detail Error di Terminal:', error);
     return NextResponse.json({

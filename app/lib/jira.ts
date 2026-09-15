@@ -339,3 +339,53 @@ export async function fetchRecentSprintIssues(sprintCount: number = 2): Promise<
   );
   return result;
 }
+
+/**
+ * Ambil issue spesifik berdasarkan key (mis. YANLIK-2916) + render jadi teks
+ * dengan format yang sama. Dipakai untuk "re-include" task dari daftar task_lain.
+ */
+export async function fetchIssuesByKeys(issueKeys: string[]): Promise<string> {
+  if (issueKeys.length === 0) return '';
+
+  const jql = 'key in (' + issueKeys.join(', ') + ') ORDER BY created ASC';
+  const issues = await searchIssues(jql);
+  console.log('[Jira] Re-include ' + issues.length + '/' + issueKeys.length + ' issue by key');
+
+  const parts: string[] = [];
+  for (let i = 0; i < issues.length; i++) {
+    const issue = issues[i];
+    const f = issue.fields;
+
+    let commentsText = '';
+    const comments = (f.comment && f.comment.comments) ?? [];
+    for (let c = 0; c < comments.length; c++) {
+      const author = comments[c]?.author?.displayName || '?';
+      const body = extractText(comments[c].body).trim();
+      if (body.length > 3) {
+        commentsText += '[' + author + ']: ' + body + '\n';
+      }
+    }
+
+    let block = '';
+    block += 'Task: [' + issue.key + '] ' + f.summary + '\n';
+    block += 'Status: ' + ((f.status && f.status.name) || '') + '\n';
+    block += 'Created: ' + formatDate(f.created) + '\n';
+    if (f.resolutiondate) {
+      block += 'Resolved: ' + formatDate(f.resolutiondate) + '\n';
+    }
+    const assigneeName =
+      (f.assignee && (f.assignee.displayName || f.assignee.name) || 'Unassigned');
+    block += 'Assignee: ' + assigneeName + '\n';
+    block += 'Priority: ' + ((f.priority && f.priority.name) || '') + '\n';
+    if (f.description) {
+      block += 'Description:\n' + extractText(f.description).trim() + '\n';
+    }
+    if (commentsText.trim()) {
+      block += 'Comments:\n' + commentsText.trim() + '\n';
+    }
+
+    parts.push(block.trim());
+  }
+
+  return parts.join('\n\n');
+}
