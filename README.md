@@ -47,7 +47,7 @@ GOOGLE_SERVICE_ACCOUNT_JSON=
 SPREADSHEET_ID=
 
 # Jira API (wajib HANYA kalau pakai mode ⚡ Dari Jira)
-JIRA_BASE_URL=https://komdigi.atlassian.net
+JIRA_BASE_URL=https://xxxxx.atlassian.net
 JIRA_EMAIL=
 JIRA_API_TOKEN=
 JIRA_PROJECT_KEY=YANLIK
