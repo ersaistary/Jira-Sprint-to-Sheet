@@ -47,6 +47,7 @@ export default function Home() {
   const [rows, setRows] = useState<Row[]>([]);
   const [pendingCommit, setPendingCommit] = useState(false);
   const [committedSheet, setCommittedSheet] = useState('');
+  const [confirmShown, setConfirmShown] = useState(false);
 
 
   // Progress asli dari API generateContent tidak bisa di-stream per-persen, jadi kita
@@ -57,13 +58,17 @@ export default function Home() {
     setProgress(3);
     const id = setInterval(() => {
       setProgress((p) => {
-        if (p >= 92) return p;
+        if (p >= 92) {
+          clearInterval(id);
+          return p;
+        }
         const step = Math.max(0.4, (92 - p) * 0.06);
         return Math.min(92, p + step);
       });
     }, 180);
     return () => clearInterval(id);
   }, [loading]);
+
 
   // Ambil daftar 5 sprint terbaru dari server saat halaman dibuka
   useEffect(() => {
@@ -96,6 +101,7 @@ export default function Home() {
     setError('');
     setRows([]);
     setCommittedSheet('');
+    setConfirmShown(false);
   };
 
   const toggleSprint = (id: number) => {
@@ -107,15 +113,20 @@ export default function Home() {
   };
 
   const toggleReInclude = (kode: string) => {
-    if (rows.length > 0 && !confirm('Regenerate akan mengganti semua baris di tabel preview (editan kamu hilang). Lanjut?')) {
-      return;
+    if (!confirmShown) {
+      if (!confirm('Meng-include task ini akan regenerate — tabel preview akan diganti dan editan kamu hilang. Lanjut?')) {
+        return;
+      }
+      setConfirmShown(true); // cuma tanya sekali
     }
     setReIncludeKeys((prev) =>
       prev.includes(kode) ? prev.filter((k) => k !== kode) : [...prev, kode]
     );
   };
 
+
   const handleGenerate = async () => {
+    // ── Validasi input ──────────────────────────────────────────
     if (mode === 'file' && !file) {
       setError('Pilih file dulu ya~');
       return;
@@ -126,30 +137,41 @@ export default function Home() {
     }
     // mode 'jira' tidak wajib pilih sprint — kalau kosong, server pakai 2 sprint terakhir
 
-    reset();
-    setLoading(true);
-    try {
-      const formData = new FormData();
-      if (mode === 'jira') {
-        formData.append('source', 'jira');
+    // ── Deteksi mode re-include ─────────────────────────────────
+    const isReInclude = mode === 'jira' && reIncludeKeys.length > 0;
+
+    // ── Susun formData DARI STATE LAMA dulu ─────────────────────
+    // (harus sebelum reset(), supaya rows & taskLain yang terkirim
+    //  masih berisi data + editan user)
+    const formData = new FormData();
+    if (mode === 'jira') {
+      formData.append('source', 'jira');
+
+      if (isReInclude) {
+        // MODE RE-INCLUDE: proses AI hanya task terpilih,
+        // kirim juga state sekarang biar server merge, bukan replace
+        formData.append('reInclude', JSON.stringify(reIncludeKeys));
+        formData.append('existingRows', JSON.stringify(rows));
+        formData.append('existingTaskLain', JSON.stringify(taskLain));
+      } else {
+        // MODE NORMAL: generate seluruh sprint
         if (selectedSprintIds.length > 0) {
           formData.append('sprintIds', JSON.stringify(selectedSprintIds));
         } else {
           formData.append('sprintCount', '2'); // fallback: 2 sprint terakhir
         }
-        if (reIncludeKeys.length > 0) {
-          formData.append('reInclude', JSON.stringify(reIncludeKeys));
-        }
-      } else if (mode === 'file' && file) {
-        formData.append('file', file);
-      } else {
-        formData.append('rawText', inputText);
       }
+    } else if (mode === 'file' && file) {
+      formData.append('file', file);
+    } else {
+      formData.append('rawText', inputText);
+    }
 
-      // reset checkbox re-include SETELAH formData tersusun, biar nilai yang
-      // terkirim masih utuh
-      setReIncludeKeys([]);
+    // ── Bersihkan UI SETELAH payload utuh ───────────────────────
+    reset();
+    setLoading(true);
 
+    try {
       const res = await fetch('/api/generate', {
         method: 'POST',
         body: formData,
@@ -163,18 +185,14 @@ export default function Home() {
       await new Promise((r) => setTimeout(r, 450));
 
       if (data.success) {
-        if (data.success) {
-          setRows(data.rows || []);
-          setTaskLain(data.task_lain || []);
-        } else {
-          setError(data.error || 'Terjadi kesalahan pada sistem.');
-          setTaskLain(data.task_lain || []);
-        }
+        setRows(data.rows || []);
         setTaskLain(data.task_lain || []);
+        setReIncludeKeys([]);
       } else {
         setError(data.error || 'Terjadi kesalahan pada sistem.');
         setTaskLain(data.task_lain || []);
       }
+
     } catch (err) {
       console.error(err);
       setProgress(100);
@@ -185,6 +203,7 @@ export default function Home() {
       setProgress(0);
     }
   };
+
 
     const updateRow = (idx: number, field: keyof Row, value: string) => {
     setRows((prev) => prev.map((r, i) => (i === idx ? { ...r, [field]: value } : r)));
@@ -232,7 +251,10 @@ export default function Home() {
         <div className={styles.loadingOverlay} role="status" aria-live="polite">
           <div className={styles.loadingCard}>
             <div className={styles.stage}>
-              <div className={styles.cat} style={{ left: `calc(progress{progress}% -progress{progress * 0.7}px)` }}>
+              <div
+                className={styles.cat}
+                style={{ left: `calc(progress{progress}% -progress{progress * 0.7}px)` }}
+              >
                 <div className={styles.catImgWrap}>
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img src="/cat-loading-base.png" alt="" className={styles.catBase} draggable={false} />
@@ -420,7 +442,10 @@ export default function Home() {
                     />{' '}
                     <span className={styles.taskKode}>{t.kode}</span> — {t.judul}
                   </label>
-                  {reIncludeKeys.length > 0 && (
+                </li>
+              ))}
+            </ul>
+            {reIncludeKeys.length > 0 && (
                   <button
                     onClick={handleGenerate}
                     disabled={loading}
@@ -430,11 +455,6 @@ export default function Home() {
                     {loading ? 'MENGGENERATE ULANG...' : `GENERATE ULANG (${reIncludeKeys.length} task di-include) ⚡`}
                   </button>
             )}
-                </li>
-              ))}
-            </ul>
-            
-
           </div>
         )}
 

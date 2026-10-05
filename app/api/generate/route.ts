@@ -2,6 +2,27 @@ import { NextResponse } from 'next/server';
 import { GoogleGenAI } from '@google/genai';
 import { fetchRecentSprintIssues, fetchIssuesBySprintIds, fetchIssuesByKeys } from '../../lib/jira';
 
+export const maxDuration = 60;
+
+async function generateWithRetry(params: any, maxRetries = 3): Promise<any> {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      return await ai.models.generateContent(params);
+    } catch (err: any) {
+      const status = err?.status || err?.code;
+      // 429 sengaja TIDAK di-retry: di free tier itu kuota harian, baru reset
+      // tengah malam Pasifik — retry beberapa detik hanya buang waktu. Hanya
+      // error transien server (503/500) yang layak dicoba ulang.
+      const retriable = status === 503 || status === 500;
+      if (!retriable || attempt === maxRetries) throw err;
+      const delay = attempt * 4000; // 4s, 8s, 12s
+      console.warn(
+        `[Generate] Gemini status ${status}, retry ${attempt}/${maxRetries} dalam ${delay}ms`
+      );
+      await new Promise((r) => setTimeout(r, delay));
+    }
+  }
+}
 
 
 // --- Gemini client (new unified SDK) ---
@@ -92,7 +113,45 @@ function tryRepairTruncatedJson(text: string): { perubahan_teknis?: any[]; task_
 // Tinggal tambah baris baru kalau ketemu username lain yang belum ke-cover.
 
 
-function buildPrompt(rawText: string): string {
+// Blok klasifikasi normal: AI memilah task teknis vs non-teknis (dipakai generate penuh).
+const CLASSIFICATION_RULES = `# ATURAN KLASIFIKASI TASK (sangat penting)
+Task yang MASUK ke "perubahan_teknis" HANYA task yang sifatnya perubahan/update teknis pada sistem/aplikasi: perbaikan bug, penambahan/pengubahan fitur, perubahan akses/akun, migrasi data, update konfigurasi/keamanan, dsb.
+
+Task yang TIDAK masuk ke "perubahan_teknis" (masukkan ke "task_lain" saja, cukup kode dan judul):
+- Task testing / QA / pengujian dalam bentuk apapun: QA regression, load testing, stress testing, performance testing, penetration testing, security testing, uji petik, smoke testing, UAT, maupun pendampingan eksekusi test — di mana pun kata kuncinya berada di judul (awal/tengah/akhir). Contoh: "Testing JDIH task 2858 & 2861", "[Seleksi] Load Testing". Task testing TIDAK PERNAH masuk perubahan_teknis walaupun deskripsinya menyebut sistem/aplikasi spesifik.
+- SEMUA task yang judulnya diawali tag "[Helpdesk]" — task Helpdesk TIDAK PERNAH masuk ke perubahan_teknis, walaupun isi deskripsinya terdengar teknis (misalnya "perubahan alamat", "update data", dll). Cek tag di awal judul, bukan isi kontennya.
+- Task dokumentasi/administratif yang bukan perubahan sistem: pembuatan undangan, laporan rapat/koordinasi, nota dinas, surat, monthly report, cover, dokumen regulasi/kepatuhan, matriks UAM/ITSR, formulir administrasi rilis, dsb.
+- Task pendampingan/koordinasi non-teknis.
+- Task desain NON-SISTEM: desain konten publikasi/campaign (cover, infografis sosialisasi, banner publikasi, logo event) yang targetnya bukan aplikasi/sistem dari daftar lokasi.
+- Task yang dikerjakan DI DALAM tool BI Metabase: pembuatan/edit dashboard, chart, visualisasi, query, atau koleksi Metabase. Metabase adalah tool analitik di luar 8 sistem aplikasi, jadi perubahan di dalamnya bukan perubahan aplikasi. Pembeda pentingnya: kalau kerjanya pada DATABASE/server/aplikasi (mis. membuat user DB agar bisa diakses Metabase, mempartisi tabel database), itu TETAP masuk "perubahan_teknis" — yang keluar ke "task_lain" HANYA kalau kerjanya dilakukan di dalam Metabase itu sendiri (dashboard/query/chart).
+
+ATURAN KHUSUS TASK DESAIN UI/UX DAN TAMPILAN APLIKASI (SANGAT PENTING, JANGAN SALAH KLASIFIKASI):
+Task desain yang targetnya adalah aplikasi/sistem (Web Komdigi, Backoffice, OSS Hub, Portal Layanan Publik, Kosmo, Portal Komdigi, dll) ADALAH PERUBAHAN TEKNIS dan WAJIB masuk ke "perubahan_teknis". Contoh yang MASUK (bukan task_lain):
+- "Desain UI/UX Tampilan Data Monev Pengadaan (...)" -> pembangunan tampilan baru di aplikasi -> perubahan_teknis (PS-03-00-007)
+- "Onboarding screen", "Offline screen", "Error state on Login screen" -> pembangunan/perbaikan tampilan aplikasi -> perubahan_teknis
+- "Tampilan Check in & Check out Pada Dashboard Portal" -> perubahan tampilan dashboard aplikasi -> perubahan_teknis
+- "Revisi Logo <nama aplikasi/sistem>" -> perubahan aset visual di dalam aplikasi -> perubahan_teknis (PS-03-00-005)
+Cara membedakannya: kalau output desain tersebut akan DIIMPLEMENTASIKAN/di-render di dalam salah satu sistem di daftar lokasi, itu teknis. Kalau outputnya hanya file gambar/dokumen untuk publikasi, laporan, atau keperluan administratif di luar aplikasi, itu non-teknis. Kehadiran tag sistem di judul (mis. [Web Komdigi], [Kosmo], [Portal Komdigi]) adalah petanda kuat task tersebut teknis.
+
+Sebelum memutuskan sebuah task masuk "perubahan_teknis", cek DUA hal secara berurutan:
+1. Apakah judulnya diawali tag [Helpdesk], [Dokumentasi], atau sejenisnya yang menandakan non-teknis? Kalau ya -> langsung ke "task_lain", JANGAN dipertimbangkan lagi meskipun isinya terdengar teknis.
+2. Kalau tidak ada tag non-teknis, baru nilai dari isi deskripsi: apakah ini benar-benar perubahan/perbaikan/penambahan sistem?`;
+
+// Blok override untuk mode re-include: task sudah dipilih manual oleh user, jadi AI
+// DILARANG menyaring/membuang task dan wajib menghasilkan satu baris untuk tiap task.
+const FORCE_TECHNICAL_OVERRIDE = `# MODE OVERRIDE — TASK DIPILIH MANUAL OLEH USER (ATURAN PALING UTAMA)
+Semua task pada teks di bagian bawah SUDAH DIPILIH SECARA MANUAL oleh user untuk DIMASUKKAN ke dokumen change log. User sudah memutuskan task-task ini layak dicatat, sehingga aturan klasifikasi/penyaringan task TIDAK berlaku di mode ini:
+- Perlakukan SETIAP task sebagai perubahan_teknis. JANGAN memasukkan satu pun ke "task_lain".
+- Hasilkan TEPAT SATU objek di "perubahan_teknis" untuk SETIAP task yang muncul di teks, tanpa kecuali — termasuk task yang biasanya kamu keluarkan (testing/QA, [Helpdesk], dokumentasi, desain non-sistem, Metabase, dsb).
+- Array "task_lain" HARUS kosong: [].
+- Tetap isi semua field (kode_perubahan, tanggal, pelaksana, lokasi, hasil, dampak, status, dll) sesuai "# ATURAN PENGISIAN FIELD" di atas, sebaik mungkin dari isi task.
+Jangan membuang, menggabungkan, atau melewatkan task apa pun.`;
+
+
+function buildPrompt(rawText: string, opts: { forceTechnical?: boolean } = {}): string {
+  // forceTechnical = mode re-include: user sudah memilih task secara manual, jadi
+  // AI dilarang membuang task ke task_lain dan wajib menghasilkan baris untuk semuanya.
+  const classificationBlock = opts.forceTechnical ? FORCE_TECHNICAL_OVERRIDE : CLASSIFICATION_RULES;
   return `Kamu adalah asisten yang mengubah export task Jira (sprint report) menjadi data terstruktur untuk dokumen Change Log / Sprint Report perusahaan.
 
 # SUMBER KODE PERUBAHAN (pilih SATU kode yang paling sesuai dengan jenis perubahan tiap task teknis)
@@ -139,28 +198,7 @@ ${DAFTAR_KODE_PERUBAHAN}
 
 PENTING soal field kosong: jika suatu field memang tidak perlu/tidak ada datanya, kembalikan STRING KOSONG "" — JANGAN PERNAH mengisi dengan tanda strip "-" atau placeholder apapun.
 
-# ATURAN KLASIFIKASI TASK (sangat penting)
-Task yang MASUK ke "perubahan_teknis" HANYA task yang sifatnya perubahan/update teknis pada sistem/aplikasi: perbaikan bug, penambahan/pengubahan fitur, perubahan akses/akun, migrasi data, update konfigurasi/keamanan, dsb.
-
-Task yang TIDAK masuk ke "perubahan_teknis" (masukkan ke "task_lain" saja, cukup kode dan judul):
-- Task testing / QA / pengujian dalam bentuk apapun: QA regression, load testing, stress testing, performance testing, penetration testing, security testing, uji petik, smoke testing, UAT, maupun pendampingan eksekusi test — di mana pun kata kuncinya berada di judul (awal/tengah/akhir). Contoh: "Testing JDIH task 2858 & 2861", "[Seleksi] Load Testing". Task testing TIDAK PERNAH masuk perubahan_teknis walaupun deskripsinya menyebut sistem/aplikasi spesifik.
-- SEMUA task yang judulnya diawali tag "[Helpdesk]" — task Helpdesk TIDAK PERNAH masuk ke perubahan_teknis, walaupun isi deskripsinya terdengar teknis (misalnya "perubahan alamat", "update data", dll). Cek tag di awal judul, bukan isi kontennya.
-- Task dokumentasi/administratif yang bukan perubahan sistem: pembuatan undangan, laporan rapat/koordinasi, nota dinas, surat, monthly report, cover, dokumen regulasi/kepatuhan, matriks UAM/ITSR, formulir administrasi rilis, dsb.
-- Task pendampingan/koordinasi non-teknis.
-- Task desain NON-SISTEM: desain konten publikasi/campaign (cover, infografis sosialisasi, banner publikasi, logo event) yang targetnya bukan aplikasi/sistem dari daftar lokasi.
-- Task yang dikerjakan DI DALAM tool BI Metabase: pembuatan/edit dashboard, chart, visualisasi, query, atau koleksi Metabase. Metabase adalah tool analitik di luar 8 sistem aplikasi, jadi perubahan di dalamnya bukan perubahan aplikasi. Pembeda pentingnya: kalau kerjanya pada DATABASE/server/aplikasi (mis. membuat user DB agar bisa diakses Metabase, mempartisi tabel database), itu TETAP masuk "perubahan_teknis" — yang keluar ke "task_lain" HANYA kalau kerjanya dilakukan di dalam Metabase itu sendiri (dashboard/query/chart).
-
-ATURAN KHUSUS TASK DESAIN UI/UX DAN TAMPILAN APLIKASI (SANGAT PENTING, JANGAN SALAH KLASIFIKASI):
-Task desain yang targetnya adalah aplikasi/sistem (Web Komdigi, Backoffice, OSS Hub, Portal Layanan Publik, Kosmo, Portal Komdigi, dll) ADALAH PERUBAHAN TEKNIS dan WAJIB masuk ke "perubahan_teknis". Contoh yang MASUK (bukan task_lain):
-- "Desain UI/UX Tampilan Data Monev Pengadaan (...)" -> pembangunan tampilan baru di aplikasi -> perubahan_teknis (PS-03-00-007)
-- "Onboarding screen", "Offline screen", "Error state on Login screen" -> pembangunan/perbaikan tampilan aplikasi -> perubahan_teknis
-- "Tampilan Check in & Check out Pada Dashboard Portal" -> perubahan tampilan dashboard aplikasi -> perubahan_teknis
-- "Revisi Logo <nama aplikasi/sistem>" -> perubahan aset visual di dalam aplikasi -> perubahan_teknis (PS-03-00-005)
-Cara membedakannya: kalau output desain tersebut akan DIIMPLEMENTASIKAN/di-render di dalam salah satu sistem di daftar lokasi, itu teknis. Kalau outputnya hanya file gambar/dokumen untuk publikasi, laporan, atau keperluan administratif di luar aplikasi, itu non-teknis. Kehadiran tag sistem di judul (mis. [Web Komdigi], [Kosmo], [Portal Komdigi]) adalah petanda kuat task tersebut teknis.
-
-Sebelum memutuskan sebuah task masuk "perubahan_teknis", cek DUA hal secara berurutan:
-1. Apakah judulnya diawali tag [Helpdesk], [Dokumentasi], atau sejenisnya yang menandakan non-teknis? Kalau ya -> langsung ke "task_lain", JANGAN dipertimbangkan lagi meskipun isinya terdengar teknis.
-2. Kalau tidak ada tag non-teknis, baru nilai dari isi deskripsi: apakah ini benar-benar perubahan/perbaikan/penambahan sistem?
+${classificationBlock}
 
 # FORMAT OUTPUT
 Kembalikan HANYA JSON (tanpa markdown, tanpa teks lain) dengan struktur persis:
@@ -225,10 +263,11 @@ function mergeParsedResults(results: { perubahan_teknis?: any[]; task_lain?: any
 }
 
 // Proses teks panjang dengan membagi ke beberapa panggilan AI, lalu merge hasilnya
-async function generateWithBatching(compactText: string) {
-  // ~50 ribu karakter per chunk ≈ aman dari MAX_TOKENS (32768 output) sekaligus
-  // mengurangi jumlah panggilan. 2 sprint (144k) jadi ~3 panggilan.
-  const MAX_CHUNK_CHARS = 50000;
+async function generateWithBatching(compactText: string, opts: { forceTechnical?: boolean } = {}) {
+  // ~90 ribu karakter per chunk: cukup besar supaya SATU sprint penuh (~72k karakter)
+  // muat dalam 1 request AI (hemat kuota free tier), tapi 2 sprint tetap terpecah
+  // jadi 2 request supaya output JSON tidak kena batas MAX_TOKENS (32768).
+  const MAX_CHUNK_CHARS = 90000;
 
   const chunks = splitIntoChunks(compactText, MAX_CHUNK_CHARS);
   console.log('[Server] Teks dibagi menjadi ' + chunks.length + ' batch untuk diproses AI');
@@ -238,8 +277,8 @@ async function generateWithBatching(compactText: string) {
   for (let i = 0; i < chunks.length; i++) {
     console.log('[Server] Memproses batch ' + (i + 1) + '/' + chunks.length + ' (' + chunks[i].length + ' karakter)...');
 
-    const prompt = buildPrompt(chunks[i]);
-    const result = await ai.models.generateContent({
+    const prompt = buildPrompt(chunks[i], opts);
+    const result = await generateWithRetry({
       model: MODEL_NAME,
       contents: prompt,
       config: {
@@ -286,9 +325,53 @@ export async function POST(req: Request) {
 
     let textToProcess = '';
 
-    // 0. Mode baru: ambil task langsung dari Jira REST API (1-2 sprint terakhir)
+    // ── MODE RE-INCLUDE (regenerate parsial) ────────────────────────────────
+    // Hanya diproses kalau user meng-centang task di daftar task_lain lalu
+    // generate ulang. AI HANYA memproses task terpilih (bukan seluruh sprint),
+    // hasilnya di-merge dengan rows/taskLain lama. Early-return supaya tidak
+    // menyentuh alur mode lain di bawah.
+    const reIncludeRaw = formData.get('reInclude') as string | null;
+
+    if (reIncludeRaw) {
+      const keys = JSON.parse(reIncludeRaw) as string[];
+      if (Array.isArray(keys) && keys.length > 0) {
+        console.log('[Server] Mode re-include, task: ' + keys.join(', '));
+
+        const existingRows = JSON.parse(formData.get('existingRows') as string || '[]');
+        const existingTaskLain = JSON.parse(formData.get('existingTaskLain') as string || '[]');
+
+        // 1. Ambil detail HANYA task terpilih dari Jira (menghasilkan teks)
+        const reIncludeText = await fetchIssuesByKeys(keys);
+
+        // 2. Proses dengan pipeline AI, tapi paksa mode teknis: user sudah memilih
+        //    task ini manual, jadi AI tidak boleh membuangnya lagi ke task_lain.
+        const compactReInclude = compactJiraText(reIncludeText);
+        const parsed = await generateWithBatching(compactReInclude, { forceTechnical: true });
+
+        const newRows = parsed.perubahan_teknis ?? [];
+        const newTaskLain = parsed.task_lain ?? [];
+
+        // 3. Merge: sisa task_lain lama (yang tidak di-re-include) + task_lain baru.
+        //    Jaring pengaman: buang task yang di-re-include dari task_lain supaya
+        //    tidak muncul lagi di daftar non-teknis walau AI sempat membangkang.
+        const sisaTaskLain = existingTaskLain.filter(
+          (t: { kode: string }) => !keys.includes(t.kode)
+        );
+        const mergedTaskLain = [...sisaTaskLain, ...newTaskLain].filter(
+          (t: { kode: string }) => !keys.includes(t.kode)
+        );
+
+        return Response.json({
+          success: true,
+          rows: [...existingRows, ...newRows],
+          task_lain: mergedTaskLain,
+        });
+      }
+    }
+
+    // ── Ekstraksi teks berdasarkan sumber: Jira (sprint penuh) / File / Teks ──
     if (source === 'jira') {
-      // Mode baru: sprint dipilih manual (array ID), fallback ke N terakhir
+      // Sprint dipilih manual (array ID); kalau kosong, fallback ke N terakhir.
       const sprintIdsRaw = formData.get('sprintIds') as string | null;
       if (sprintIdsRaw) {
         const sprintIds = JSON.parse(sprintIdsRaw) as number[];
@@ -299,22 +382,8 @@ export async function POST(req: Request) {
         console.log('[Server] Mengambil task dari Jira API (' + sprintCount + ' sprint terakhir)...');
         textToProcess = await fetchRecentSprintIssues(sprintCount);
       }
-            // Re-include: task yang user centang dari daftar task_lain sebelumnya
-      const reIncludeRaw = formData.get('reInclude') as string | null;
-      if (reIncludeRaw) {
-        const keys = JSON.parse(reIncludeRaw) as string[];
-        if (Array.isArray(keys) && keys.length > 0) {
-          console.log('[Server] Re-include task: ' + keys.join(', '));
-          const extraText = await fetchIssuesByKeys(keys);
-          if (extraText) {
-            textToProcess = extraText + '\n\n' + textToProcess;
-          }
-        }
-      }
       console.log('[Server] Preview teks dari Jira:', textToProcess.slice(0, 500));
-    }
-    // 1. Ekstraksi teks berdasarkan input (File atau Textarea)
-    else if (file) {
+    } else if (file) {
       const bytes = await file.arrayBuffer();
       const buffer = Buffer.from(bytes);
 
@@ -362,14 +431,6 @@ export async function POST(req: Request) {
     const rowsData = parsed.perubahan_teknis ?? [];
     const taskLain = parsed.task_lain ?? [];
 
-    if (rowsData.length === 0) {
-      return NextResponse.json({
-        error: 'Tidak ditemukan task teknis (perubahan/fitur/bug fix) pada sumber data ini untuk dimasukkan ke sheet.',
-        task_lain: taskLain,
-      }, { status: 400 });
-    }
-
-    // 3. Hubungkan ke Google Sheets API
     if (rowsData.length === 0) {
       return NextResponse.json({
         error: 'Tidak ditemukan task teknis (perubahan/fitur/bug fix) pada sumber data ini untuk dimasukkan ke sheet.',
