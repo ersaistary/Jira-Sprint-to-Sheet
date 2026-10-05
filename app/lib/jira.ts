@@ -219,8 +219,14 @@ async function searchIssues(jql: string): Promise<JiraIssue[]> {
  * Ambil issue dari SATU sprint by ID + render jadi satu blok teks
  * (format mirip export Jira per-issue). Dipakai ulang oleh
  * fetchRecentSprintIssues dan fetchIssuesBySprintIds.
+ *
+ * `seenKeys` (opsional): Set berisi key issue yang sudah dirender oleh sprint
+ * sebelumnya dalam satu pemanggilan generate. Task carry-over terhubung ke DUA
+ * sprint sekaligus, jadi query `sprint = A` dan `sprint = B` sama-sama
+ * mengembalikannya — tanpa dedup ini task tersebut muncul 2x di teks dan AI
+ * menghasilkan baris dobel. Key yang sudah ada di Set dilewati.
  */
-async function fetchIssuesFromSprint(sprint: Sprint): Promise<string> {
+async function fetchIssuesFromSprint(sprint: Sprint, seenKeys?: Set<string>): Promise<string> {
   console.log(
     '[Jira] Mengambil issue dari sprint "' + sprint.name + '" (' + sprint.state + ')...'
   );
@@ -230,9 +236,19 @@ async function fetchIssuesFromSprint(sprint: Sprint): Promise<string> {
   console.log('[Jira] Sprint "' + sprint.name + '": ' + issues.length + ' issue');
 
   const parts: string[] = [];
+  let skipped = 0;
   for (let i = 0; i < issues.length; i++) {
     const issue = issues[i];
     const f = issue.fields;
+
+    // Lewati issue yang sudah dirender dari sprint lain (carry-over) supaya tidak dobel.
+    if (seenKeys) {
+      if (seenKeys.has(issue.key)) {
+        skipped++;
+        continue;
+      }
+      seenKeys.add(issue.key);
+    }
 
     let commentsText = '';
     const comments = (f.comment && f.comment.comments) ?? [];
@@ -263,6 +279,10 @@ async function fetchIssuesFromSprint(sprint: Sprint): Promise<string> {
     }
 
     parts.push(block.trim());
+  }
+
+  if (skipped > 0) {
+    console.log('[Jira] Sprint "' + sprint.name + '": lewati ' + skipped + ' task carry-over (sudah dirender)');
   }
 
   return parts.join('\n\n');
@@ -302,8 +322,9 @@ export async function fetchIssuesBySprintIds(sprintIds: number[]): Promise<strin
   );
 
   const parts: string[] = [];
+  const seenKeys = new Set<string>();
   for (let i = 0; i < sprints.length; i++) {
-    parts.push(await fetchIssuesFromSprint(sprints[i]));
+    parts.push(await fetchIssuesFromSprint(sprints[i], seenKeys));
   }
 
   const result = parts.join('\n\n');
@@ -329,8 +350,9 @@ export async function fetchRecentSprintIssues(sprintCount: number = 2): Promise<
   }
 
   const parts: string[] = [];
+  const seenKeys = new Set<string>();
   for (let s = 0; s < sprints.length; s++) {
-    parts.push(await fetchIssuesFromSprint(sprints[s]));
+    parts.push(await fetchIssuesFromSprint(sprints[s], seenKeys));
   }
 
   const result = parts.join('\n\n');

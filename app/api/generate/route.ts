@@ -262,54 +262,107 @@ function mergeParsedResults(results: { perubahan_teknis?: any[]; task_lain?: any
   return { perubahan_teknis: perubahan, task_lain: lain };
 }
 
+// Batas kedalaman re-split saat output AI kepotong (MAX_TOKENS). Tiap level
+// membelah chunk jadi ~2 bagian, jadi depth 3 = sampai ~8 sub-chunk sebelum menyerah.
+const MAX_SPLIT_DEPTH = 3;
+
+// Proses SATU chunk teks jadi JSON. Kalau output AI terpotong (finishReason
+// MAX_TOKENS, atau JSON-nya tidak utuh sampai harus direpair), chunk dibelah dua
+// dan tiap belahan diproses ulang secara rekursif, lalu hasilnya di-merge.
+// Ini penting karena "task_lain" selalu berada di AKHIR JSON output, jadi dialah
+// yang pertama hilang saat output kepotong — tanpa re-split, daftar task non-teknis
+// (yang dipakai user untuk re-include) bisa lenyap diam-diam.
+async function processChunk(
+  chunk: string,
+  opts: { forceTechnical?: boolean },
+  depth: number
+): Promise<{ perubahan_teknis?: any[]; task_lain?: any[] }> {
+  const prompt = buildPrompt(chunk, opts);
+  const result = await generateWithRetry({
+    model: MODEL_NAME,
+    contents: prompt,
+    config: {
+      responseMimeType: 'application/json',
+      temperature: 0.2,
+      maxOutputTokens: 32768,
+    },
+  });
+
+  const finishReason = result.candidates?.[0]?.finishReason;
+  let textResult = (result.text ?? '').trim();
+
+  if (textResult.startsWith('```json')) {
+    textResult = textResult.replace(/^```json/, '').replace(/```$/, '').trim();
+  } else if (textResult.startsWith('```')) {
+    textResult = textResult.replace(/^```/, '').replace(/```$/, '').trim();
+  }
+
+  let parsed: { perubahan_teknis?: any[]; task_lain?: any[] } | null = null;
+  let neededRepair = false;
+  try {
+    parsed = JSON.parse(textResult);
+  } catch {
+    neededRepair = true;
+    parsed = tryRepairTruncatedJson(textResult);
+  }
+
+  // Output dianggap kepotong kalau finishReason MAX_TOKENS, atau JSON-nya tidak
+  // utuh (perlu direpair). Keduanya tanda response tidak muat di maxOutputTokens.
+  const truncated = String(finishReason).toUpperCase() === 'MAX_TOKENS' || neededRepair;
+
+  if (truncated && depth < MAX_SPLIT_DEPTH) {
+    const half = Math.ceil(chunk.length / 2);
+    const subChunks = splitIntoChunks(chunk, half);
+    // Hanya belah kalau benar-benar menghasilkan >1 chunk (blok task cukup kecil).
+    if (subChunks.length > 1) {
+      console.warn(
+        '[Server] Output AI terpotong (finishReason: ' + finishReason + ') pada chunk ' +
+        chunk.length + ' karakter — belah jadi ' + subChunks.length + ' bagian (depth ' + (depth + 1) + ')'
+      );
+      const subResults: { perubahan_teknis?: any[]; task_lain?: any[] }[] = [];
+      for (let i = 0; i < subChunks.length; i++) {
+        subResults.push(await processChunk(subChunks[i], opts, depth + 1));
+      }
+      return mergeParsedResults(subResults);
+    }
+  }
+
+  if (!parsed) {
+    throw new Error(
+      'Chunk (' + chunk.length + ' karakter) mengembalikan JSON tidak valid (finishReason: ' +
+      finishReason + '). Coba lagi.'
+    );
+  }
+
+  if (truncated) {
+    console.warn(
+      '[Server] Chunk masih terpotong setelah split maksimal (depth ' + depth +
+      ') — sebagian task mungkin hilang. finishReason: ' + finishReason
+    );
+  }
+
+  console.log(
+    '[Server] Chunk selesai (' + chunk.length + ' karakter): ' +
+    (parsed.perubahan_teknis?.length || 0) + ' teknis, ' + (parsed.task_lain?.length || 0) + ' lain'
+  );
+  return parsed;
+}
+
 // Proses teks panjang dengan membagi ke beberapa panggilan AI, lalu merge hasilnya
 async function generateWithBatching(compactText: string, opts: { forceTechnical?: boolean } = {}) {
   // ~90 ribu karakter per chunk: cukup besar supaya SATU sprint penuh (~72k karakter)
-  // muat dalam 1 request AI (hemat kuota free tier), tapi 2 sprint tetap terpecah
-  // jadi 2 request supaya output JSON tidak kena batas MAX_TOKENS (32768).
+  // muat dalam 1 request AI (hemat kuota free tier). Kalau ternyata output-nya
+  // kepotong MAX_TOKENS, processChunk otomatis membelah chunk itu dan mengulang,
+  // jadi correctness tetap terjaga tanpa mengorbankan penghematan kuota di kasus normal.
   const MAX_CHUNK_CHARS = 90000;
 
   const chunks = splitIntoChunks(compactText, MAX_CHUNK_CHARS);
   console.log('[Server] Teks dibagi menjadi ' + chunks.length + ' batch untuk diproses AI');
 
   const results: { perubahan_teknis?: any[]; task_lain?: any[] }[] = [];
-
   for (let i = 0; i < chunks.length; i++) {
     console.log('[Server] Memproses batch ' + (i + 1) + '/' + chunks.length + ' (' + chunks[i].length + ' karakter)...');
-
-    const prompt = buildPrompt(chunks[i], opts);
-    const result = await generateWithRetry({
-      model: MODEL_NAME,
-      contents: prompt,
-      config: {
-        responseMimeType: 'application/json',
-        temperature: 0.2,
-        maxOutputTokens: 32768,
-      },
-    });
-
-    const finishReason = result.candidates?.[0]?.finishReason;
-    let textResult = (result.text ?? '').trim();
-
-    if (textResult.startsWith('```json')) {
-      textResult = textResult.replace(/^```json/, '').replace(/```$/, '').trim();
-    } else if (textResult.startsWith('```')) {
-      textResult = textResult.replace(/^```/, '').replace(/```$/, '').trim();
-    }
-
-    let parsed: { perubahan_teknis?: any[]; task_lain?: any[] } | null = null;
-    try {
-      parsed = JSON.parse(textResult);
-    } catch {
-      parsed = tryRepairTruncatedJson(textResult);
-    }
-
-    if (!parsed) {
-      throw new Error('Batch ' + (i + 1) + '/' + chunks.length + ' mengembalikan JSON tidak valid (finishReason: ' + finishReason + '). Coba lagi.');
-    }
-
-    console.log('[Server] Batch ' + (i + 1) + ' selesai: ' + (parsed.perubahan_teknis?.length || 0) + ' teknis, ' + (parsed.task_lain?.length || 0) + ' lain');
-    results.push(parsed);
+    results.push(await processChunk(chunks[i], opts, 0));
   }
 
   return mergeParsedResults(results);
