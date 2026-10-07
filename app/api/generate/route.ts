@@ -4,24 +4,50 @@ import { fetchRecentSprintIssues, fetchIssuesBySprintIds, fetchIssuesByKeys } fr
 
 export const maxDuration = 60;
 
-async function generateWithRetry(params: any, maxRetries = 3): Promise<any> {
+// Budget waktu untuk seluruh request (fetch Jira + semua panggilan AI), disisakan
+// di bawah maxDuration=60 supaya kita selalu sempat melempar error bersih SEBELUM
+// Vercel mematikan fungsi di 60 detik. Tanpa ini, 503 yang menggantung ~20 detik
+// per percobaan bikin total retry lewat 60s -> kena "Runtime Timeout" (504) yang
+// tidak punya pesan berguna buat user.
+const RETRY_BUDGET_MS = 48000;
+
+async function generateWithRetry(params: any, deadline: number, maxRetries = 3): Promise<any> {
+  let lastErr: any;
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
       return await ai.models.generateContent(params);
     } catch (err: any) {
+      lastErr = err;
       const status = err?.status || err?.code;
       // 429 sengaja TIDAK di-retry: di free tier itu kuota harian, baru reset
       // tengah malam Pasifik — retry beberapa detik hanya buang waktu. Hanya
       // error transien server (503/500) yang layak dicoba ulang.
       const retriable = status === 503 || status === 500;
-      if (!retriable || attempt === maxRetries) throw err;
+      if (!retriable) throw err;
+
       const delay = attempt * 4000; // 4s, 8s, 12s
+      // Berhenti kalau ini percobaan terakhir ATAU sisa waktu tidak cukup untuk
+      // tidur + satu percobaan lagi. Gagal cepat & bersih lebih baik daripada
+      // digantung sampai Vercel timeout.
+      if (attempt === maxRetries || Date.now() + delay > deadline) break;
+
       console.warn(
         `[Generate] Gemini status ${status}, retry ${attempt}/${maxRetries} dalam ${delay}ms`
       );
       await new Promise((r) => setTimeout(r, delay));
     }
   }
+
+  const status = lastErr?.status || lastErr?.code;
+  if (status === 503) {
+    throw new Error(
+      'Gemini sedang overload (503 UNAVAILABLE) dan semua retry gagal / kehabisan waktu. ' +
+      'Ini masalah kapasitas di sisi Google — di free tier request kamu dapat prioritas ' +
+      'terendah saat trafik tinggi, bukan kesalahan data atau kode kamu. ' +
+      'Coba lagi beberapa menit, atau aktifkan billing Gemini agar request diprioritaskan.'
+    );
+  }
+  throw lastErr;
 }
 
 
@@ -274,19 +300,22 @@ const MAX_SPLIT_DEPTH = 3;
 // (yang dipakai user untuk re-include) bisa lenyap diam-diam.
 async function processChunk(
   chunk: string,
-  opts: { forceTechnical?: boolean },
+  opts: { forceTechnical?: boolean; deadline?: number },
   depth: number
 ): Promise<{ perubahan_teknis?: any[]; task_lain?: any[] }> {
   const prompt = buildPrompt(chunk, opts);
-  const result = await generateWithRetry({
-    model: MODEL_NAME,
-    contents: prompt,
-    config: {
-      responseMimeType: 'application/json',
-      temperature: 0.2,
-      maxOutputTokens: 32768,
+  const result = await generateWithRetry(
+    {
+      model: MODEL_NAME,
+      contents: prompt,
+      config: {
+        responseMimeType: 'application/json',
+        temperature: 0.2,
+        maxOutputTokens: 32768,
+      },
     },
-  });
+    opts.deadline ?? Date.now() + RETRY_BUDGET_MS
+  );
 
   const finishReason = result.candidates?.[0]?.finishReason;
   let textResult = (result.text ?? '').trim();
@@ -349,7 +378,10 @@ async function processChunk(
 }
 
 // Proses teks panjang dengan membagi ke beberapa panggilan AI, lalu merge hasilnya
-async function generateWithBatching(compactText: string, opts: { forceTechnical?: boolean } = {}) {
+async function generateWithBatching(
+  compactText: string,
+  opts: { forceTechnical?: boolean; deadline?: number } = {}
+) {
   // ~90 ribu karakter per chunk: cukup besar supaya SATU sprint penuh (~72k karakter)
   // muat dalam 1 request AI (hemat kuota free tier). Kalau ternyata output-nya
   // kepotong MAX_TOKENS, processChunk otomatis membelah chunk itu dan mengulang,
@@ -371,6 +403,12 @@ async function generateWithBatching(compactText: string, opts: { forceTechnical?
 
 export async function POST(req: Request) {
   try {
+    // Deadline dihitung dari awal request (sebelum fetch Jira) supaya seluruh
+    // rangkaian — Jira + semua panggilan AI + retry — tetap selesai sebelum
+    // Vercel mematikan fungsi di maxDuration=60. Kalau mepet, generateWithRetry
+    // berhenti dan melempar error bersih, bukan kena Runtime Timeout 504.
+    const deadline = Date.now() + RETRY_BUDGET_MS;
+
     const formData = await req.formData();
     const source = formData.get('source') as string | null; // "jira" | null
     const file = formData.get('file') as File | null;
@@ -399,7 +437,7 @@ export async function POST(req: Request) {
         // 2. Proses dengan pipeline AI, tapi paksa mode teknis: user sudah memilih
         //    task ini manual, jadi AI tidak boleh membuangnya lagi ke task_lain.
         const compactReInclude = compactJiraText(reIncludeText);
-        const parsed = await generateWithBatching(compactReInclude, { forceTechnical: true });
+        const parsed = await generateWithBatching(compactReInclude, { forceTechnical: true, deadline });
 
         const newRows = parsed.perubahan_teknis ?? [];
         const newTaskLain = parsed.task_lain ?? [];
@@ -479,7 +517,7 @@ export async function POST(req: Request) {
     console.log('[Server] Panjang teks setelah dipangkas:', compactText.length, '(dari', textToProcess.trim().length, ')');
 
     // 3. Panggil AI — otomatis dipecah per batch kalau teks kepanjangan
-    const parsed = await generateWithBatching(compactText);
+    const parsed = await generateWithBatching(compactText, { deadline });
 
     const rowsData = parsed.perubahan_teknis ?? [];
     const taskLain = parsed.task_lain ?? [];
