@@ -1,0 +1,123 @@
+Task: [YANLIK-3001] [Seleksi] Reset password akun panitia seleksi tidak bisa login
+Status: Done
+Created: 01-Jul-2026
+Resolved: 02-Jul-2026
+Assignee: Budi Santoso
+Priority: High
+Description:
+Panitia seleksi melaporkan tidak bisa login ke aplikasi Seleksi karena lupa password. Dilakukan reset password atas permintaan pengguna oleh agent aplikasi level 1.
+Comments:
+[Budi Santoso]: Password sudah direset, panitia bisa login kembali.
+
+Task: [YANLIK-3002] [JDIH] Perbaikan tampilan daftar dokumen peraturan yang berantakan
+Status: Testing by QA
+Created: 03-Jul-2026
+Assignee: Siti Rahayu
+Priority: Medium
+Description:
+Tampilan daftar dokumen peraturan di JDIH tidak rapi pada layar kecil (kolom tanggal tumpang tindih). Perbaikan CSS pada komponen tabel dokumen. Gangguan kecil, fungsi utama tetap jalan.
+
+Task: [YANLIK-3003] [OSSHUB] Penambahan notifikasi email saat permohonan disetujui
+Status: In Progress
+Created: 05-Jul-2026
+Assignee: Andi Wijaya
+Priority: Medium
+Description:
+Menambahkan fitur pengiriman notifikasi email otomatis kepada pemohon ketika status permohonannya berubah menjadi disetujui di OSS Hub. Fitur baru penunjang kenyamanan, tidak mengubah alur utama.
+
+Task: [YANLIK-3004] [Web Komdigi] Update banner dan artikel halaman utama
+Status: Done
+Created: 07-Jul-2026
+Resolved: 08-Jul-2026
+Assignee: Siti Rahayu
+Priority: Low
+Description:
+Mengubah banner promosi dan memperbarui teks artikel pada halaman utama Web Komdigi sesuai permintaan tim konten. Perubahan teks dan gambar dinamis.
+
+Task: [YANLIK-3005] [ShortUrl] Isu hasil edit short link tidak tersimpan
+Status: Done
+Created: 09-Jul-2026
+Resolved: 10-Jul-2026
+Assignee: Andi Wijaya
+Priority: Medium
+Description:
+Saat pengguna mengedit tujuan short link di ShortURL lalu menyimpan, perubahan kadang tidak tersimpan. Diperbaiki logika penyimpanan pada endpoint update. Bug minor, tidak menyebabkan gagal akses.
+
+Task: [YANLIK-3006] [Simponi Gateway] Migrasi data transaksi ke skema tabel baru di staging
+Status: Done
+Created: 11-Jul-2026
+Resolved: 14-Jul-2026
+Assignee: Budi Santoso
+Priority: Medium
+Description:
+Melakukan migrasi data transaksi Simponi Gateway ke skema tabel baru. Migrasi berulang risiko rendah, dijalankan di lingkungan dev/test, tidak menyentuh data sensitif layanan utama.
+
+Task: [YANLIK-3007] Pembuatan user read-only database Portal Layanan Publik untuk akses Metabase
+Status: Done
+Created: 15-Jul-2026
+Resolved: 15-Jul-2026
+Assignee: Dewi Lestari
+Priority: Medium
+Description:
+Membuat akun user database read-only pada database Portal Layanan Publik agar tim data dapat mengaksesnya melalui Metabase untuk keperluan analitik. Kerja dilakukan pada database aplikasi, bukan di dalam Metabase.
+
+Task: [YANLIK-3008] [Kosmo] Reset password pengguna aplikasi yang terkunci
+Status: Done
+Created: 02-Jul-2026
+Resolved: 03-Jul-2026
+Assignee: Dewi Lestari
+Priority: High
+Description:
+Pengguna aplikasi Kosmo tidak bisa login karena akun terkunci. Dilakukan reset password atas permintaan pengguna oleh agent aplikasi level 1.
+
+Task: [YANLIK-3009] [Portal Komdigi] Penambahan fitur pencarian dokumen pada beranda
+Status: In Progress
+Created: 06-Jul-2026
+Assignee: Andi Wijaya
+Priority: Medium
+Description:
+Menambahkan kolom pencarian dokumen pada beranda Portal Komdigi agar pengguna lebih cepat menemukan konten. Fitur baru penunjang efisiensi, tidak mengubah fungsi utama.
+
+Task: [YANLIK-3010] [Kosmo] Update konten berita dan gambar pada halaman informasi
+Status: Done
+Created: 08-Jul-2026
+Resolved: 09-Jul-2026
+Assignee: Siti Rahayu
+Priority: Low
+Description:
+Memperbarui teks berita dan mengganti gambar pada halaman informasi aplikasi Kosmo sesuai permintaan pengelola konten. Perubahan konten dinamis.
+
+Task: [YANLIK-3011] [Seleksi] Load Testing aplikasi seleksi sebelum rilis
+Status: Done
+Created: 12-Jul-2026
+Resolved: 13-Jul-2026
+Assignee: Budi Santoso
+Priority: High
+Description:
+Melakukan load testing / uji beban pada aplikasi Seleksi untuk memastikan kestabilan sebelum rilis ke produksi. Pengukuran response time dan throughput.
+
+Task: [YANLIK-3012] [Helpdesk] Permintaan perubahan alamat kantor pada data pengguna
+Status: Done
+Created: 13-Jul-2026
+Resolved: 13-Jul-2026
+Assignee: Dewi Lestari
+Priority: Low
+Description:
+Menindaklanjuti tiket helpdesk dari pengguna yang meminta perubahan data alamat kantor.
+
+Task: [YANLIK-3013] Pembuatan dashboard monitoring trafik di Metabase
+Status: In Progress
+Created: 14-Jul-2026
+Assignee: Andi Wijaya
+Priority: Medium
+Description:
+Membuat dashboard dan chart visualisasi monitoring trafik di dalam tool Metabase, termasuk menyusun query untuk koleksi data.
+
+Task: [YANLIK-3014] [Dokumentasi] Penyusunan nota dinas rapat koordinasi tim
+Status: Done
+Created: 15-Jul-2026
+Resolved: 16-Jul-2026
+Assignee: Siti Rahayu
+Priority: Low
+Description:
+Menyusun nota dinas dan dokumen administratif untuk rapat koordinasi tim. Bukan perubahan pada sistem/aplikasi.

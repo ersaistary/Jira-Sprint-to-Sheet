@@ -4,14 +4,17 @@ import { fetchRecentSprintIssues, fetchIssuesBySprintIds, fetchIssuesByKeys } fr
 
 export const maxDuration = 60;
 
-// Budget waktu untuk seluruh request (fetch Jira + semua panggilan AI), disisakan
-// di bawah maxDuration=60 supaya kita selalu sempat melempar error bersih SEBELUM
-// Vercel mematikan fungsi di 60 detik. Tanpa ini, 503 yang menggantung ~20 detik
-// per percobaan bikin total retry lewat 60s -> kena "Runtime Timeout" (504) yang
-// tidak punya pesan berguna buat user.
-const RETRY_BUDGET_MS = 48000;
+// Budget waktu untuk seluruh request (fetch Jira + semua panggilan AI).
+// Di Vercel fungsi dibunuh di maxDuration=60, jadi budget harus disisakan di bawahnya
+// supaya kita selalu sempat melempar error bersih SEBELUM Vercel mematikan fungsi
+// (tanpa ini, 503 yang menggantung bikin total retry lewat 60s -> Runtime Timeout 504).
+// Di lokal (dev) TIDAK ada batas 60s, jadi budget bisa jauh lebih longgar: badai 503
+// sesaat bisa "ditunggui" dengan retry sampai dapat jendela sukses saat testing.
+const IS_VERCEL = !!process.env.VERCEL;
+const RETRY_BUDGET_MS = IS_VERCEL ? 48000 : 300000; // 48s di Vercel, 5 menit di lokal
+const MAX_RETRIES = IS_VERCEL ? 3 : 8;
 
-async function generateWithRetry(params: any, deadline: number, maxRetries = 3): Promise<any> {
+async function generateWithRetry(params: any, deadline: number, maxRetries = MAX_RETRIES): Promise<any> {
   let lastErr: any;
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
@@ -25,7 +28,10 @@ async function generateWithRetry(params: any, deadline: number, maxRetries = 3):
       const retriable = status === 503 || status === 500;
       if (!retriable) throw err;
 
-      const delay = attempt * 4000; // 4s, 8s, 12s
+      // Backoff eksponensial (4s, 8s, 16s, 32s, dst, cap 30s) + jitter acak supaya
+      // beberapa retry tidak menabrak jendela overload yang sama persis.
+      const delay =
+        Math.min(4000 * 2 ** (attempt - 1), 30000) + Math.floor(Math.random() * 2000);
       // Berhenti kalau ini percobaan terakhir ATAU sisa waktu tidak cukup untuk
       // tidur + satu percobaan lagi. Gagal cepat & bersih lebih baik daripada
       // digantung sampai Vercel timeout.
@@ -65,16 +71,34 @@ const MODEL_NAME = 'gemini-3.5-flash';
 // ------------------------------------------------------------------------------------
 // ATURAN BISNIS — sekali ditulis di sini, tidak perlu dipaste ulang setiap generate.
 // ------------------------------------------------------------------------------------
+// Format kode: PS-XX-YY-ZZZ.
+//   XX  -> SELALU "03" (tidak pernah berubah).
+//   YY  -> tim fokus, ditentukan DARI LOKASI task (lihat daftar lokasi di buildPrompt):
+//            "02" = lokasi task ada di aplikasi TIM FOKUS YANLIK (digitalisasi layanan)
+//            "00" = lokasi task DI LUAR tim fokus yanlik (Kosmo/Komso Komdigi, Portal komdigi, dll)
+//   ZZZ -> jenis perubahan (001-009), IDENTIK untuk kedua tim; hanya YY yang membedakan.
+// Jadi satu-satunya bagian yang berubah antar tim adalah YY. Daftar jenis di bawah
+// sengaja ditulis TANPA prefix supaya berlaku untuk PS-03-02-XXX maupun PS-03-00-XXX.
 const DAFTAR_KODE_PERUBAHAN = `
-PS-03-00-001 | Penambahan atau penonaktifan akun pengguna aplikasi | Menambah atau menonaktifkan user berdasarkan permintaan, dilakukan oleh BE admin atau agent aplikasi level 1.
-PS-03-00-002 | Penambahan atau penghapusan akun pengguna aplikasi | Menambah atau menghapus user dari database aplikasi oleh tim developer.
-PS-03-00-003 | Reset password pengguna aplikasi | Mengatur ulang kata sandi user atas permintaan pengguna, dilakukan oleh BE admin atau agent aplikasi level 1.
-PS-03-00-004 | Pengelolaan hak akses atau peran pengguna | Mengubah role user aplikasi berdasarkan permintaan, dilakukan oleh BE admin atau agent aplikasi level 1.
-PS-03-00-005 | Update konten dinamis dalam aplikasi | Mengubah teks, gambar, atau dokumen (banner, artikel, konten lain), dilakukan oleh BE admin atau agent aplikasi level 1.
-PS-03-00-006 | Perbaikan isu/bug minor pada fitur aplikasi | Isu yang menyebabkan ketidaknyamanan/gangguan kecil tapi tidak mengganggu fungsi utama dan tidak menyebabkan crash/gagal akses (UI tidak rapi, typo, loading lama tapi selesai, fitur sekunder tidak sempurna).
-PS-03-00-007 | Penambahan fitur minor pada aplikasi | Fitur baru yang meningkatkan kenyamanan/efisiensi/estetika tapi tidak berdampak ke fungsi utama (UI, share/simpan data, notifikasi, navigasi, dll).
-PS-03-00-008 | Update sistem dan keamanan bersifat minor | Patch minor tanpa reboot/downtime, update sertifikat SSL sebelum expired (tanpa ubah konfigurasi), update library pihak ketiga yang sudah diuji di staging dan tidak berdampak ke core logic.
-PS-03-00-009 | Migrasi data | Proses migrasi berulang dengan risiko rendah yang sudah diketahui, dilakukan di lingkungan dev/test dan tidak menyentuh data sensitif/layanan utama langsung.
+001 | Penambahan atau penonaktifan akun pengguna aplikasi | Menambah atau menonaktifkan user berdasarkan permintaan, dilakukan oleh BE admin atau agent aplikasi level 1.
+002 | Penambahan atau penghapusan akun pengguna aplikasi | Menambah atau menghapus user dari database aplikasi oleh tim developer.
+003 | Reset password pengguna aplikasi | Mengatur ulang kata sandi user atas permintaan pengguna, dilakukan oleh BE admin atau agent aplikasi level 1.
+004 | Pengelolaan hak akses atau peran pengguna | Mengubah role user aplikasi berdasarkan permintaan, dilakukan oleh BE admin atau agent aplikasi level 1.
+005 | Update konten dinamis dalam aplikasi | Mengubah teks, gambar, atau dokumen (banner, artikel, konten lain), dilakukan oleh BE admin atau agent aplikasi level 1.
+006 | Perbaikan isu/bug minor pada fitur aplikasi | Isu yang menyebabkan ketidaknyamanan/gangguan kecil tapi tidak mengganggu fungsi utama dan tidak menyebabkan crash/gagal akses (UI tidak rapi, typo, loading lama tapi selesai, fitur sekunder tidak sempurna).
+007 | Penambahan fitur minor pada aplikasi | Fitur baru yang meningkatkan kenyamanan/efisiensi/estetika tapi tidak berdampak ke fungsi utama (UI, share/simpan data, notifikasi, navigasi, dll).
+008 | Update sistem dan keamanan bersifat minor | Patch minor tanpa reboot/downtime, update sertifikat SSL sebelum expired (tanpa ubah konfigurasi), update library pihak ketiga yang sudah diuji di staging dan tidak berdampak ke core logic.
+009 | Migrasi data | Proses migrasi berulang dengan risiko rendah yang sudah diketahui, dilakukan di lingkungan dev/test dan tidak menyentuh data sensitif/layanan utama langsung.
+`.trim();
+
+// Penjelasan cara merakit kode lengkap dari YY (tim fokus) + ZZZ (jenis perubahan).
+// Ditempel tepat setelah daftar jenis supaya AI paham aturan prefix-nya.
+const ATURAN_RAKIT_KODE = `
+Cara merakit kode_perubahan (format PS-XX-YY-ZZZ):
+- XX SELALU "03".
+- YY dipilih dari LOKASI task: "02" jika lokasi termasuk aplikasi TIM FOKUS YANLIK, "00" jika lokasi DI LUAR tim fokus yanlik. (Daftar lokasi & pengelompokannya ada di "# ATURAN PENGISIAN FIELD" bagian lokasi.)
+- ZZZ dipilih dari daftar jenis perubahan di atas (001-009), yang paling cocok dengan isi task. ZZZ ini SAMA untuk kedua tim.
+Contoh: task reset password di aplikasi yanlik "Seleksi" -> PS-03-02-003. Task reset password yang sama tapi di aplikasi non-yanlik "Komso Komdigi" -> PS-03-00-003. Yang berubah HANYA bagian YY.
 `.trim();
 
 // Baris-baris boilerplate ini selalu muncul di SETIAP task pada export Jira, tapi
@@ -153,10 +177,10 @@ Task yang TIDAK masuk ke "perubahan_teknis" (masukkan ke "task_lain" saja, cukup
 
 ATURAN KHUSUS TASK DESAIN UI/UX DAN TAMPILAN APLIKASI (SANGAT PENTING, JANGAN SALAH KLASIFIKASI):
 Task desain yang targetnya adalah aplikasi/sistem (Web Komdigi, Backoffice, OSS Hub, Portal Layanan Publik, Kosmo, Portal Komdigi, dll) ADALAH PERUBAHAN TEKNIS dan WAJIB masuk ke "perubahan_teknis". Contoh yang MASUK (bukan task_lain):
-- "Desain UI/UX Tampilan Data Monev Pengadaan (...)" -> pembangunan tampilan baru di aplikasi -> perubahan_teknis (PS-03-00-007)
+- "Desain UI/UX Tampilan Data Monev Pengadaan (...)" -> pembangunan tampilan baru di aplikasi -> perubahan_teknis (jenis ZZZ = 007; kode lengkap PS-03-YY-007, YY tergantung lokasi aplikasinya)
 - "Onboarding screen", "Offline screen", "Error state on Login screen" -> pembangunan/perbaikan tampilan aplikasi -> perubahan_teknis
 - "Tampilan Check in & Check out Pada Dashboard Portal" -> perubahan tampilan dashboard aplikasi -> perubahan_teknis
-- "Revisi Logo <nama aplikasi/sistem>" -> perubahan aset visual di dalam aplikasi -> perubahan_teknis (PS-03-00-005)
+- "Revisi Logo <nama aplikasi/sistem>" -> perubahan aset visual di dalam aplikasi -> perubahan_teknis (jenis ZZZ = 005; kode lengkap PS-03-YY-005, YY tergantung lokasi aplikasinya)
 Cara membedakannya: kalau output desain tersebut akan DIIMPLEMENTASIKAN/di-render di dalam salah satu sistem di daftar lokasi, itu teknis. Kalau outputnya hanya file gambar/dokumen untuk publikasi, laporan, atau keperluan administratif di luar aplikasi, itu non-teknis. Kehadiran tag sistem di judul (mis. [Web Komdigi], [Kosmo], [Portal Komdigi]) adalah petanda kuat task tersebut teknis.
 
 Sebelum memutuskan sebuah task masuk "perubahan_teknis", cek DUA hal secara berurutan:
@@ -180,15 +204,18 @@ function buildPrompt(rawText: string, opts: { forceTechnical?: boolean } = {}): 
   const classificationBlock = opts.forceTechnical ? FORCE_TECHNICAL_OVERRIDE : CLASSIFICATION_RULES;
   return `Kamu adalah asisten yang mengubah export task Jira (sprint report) menjadi data terstruktur untuk dokumen Change Log / Sprint Report perusahaan.
 
-# SUMBER KODE PERUBAHAN (pilih SATU kode yang paling sesuai dengan jenis perubahan tiap task teknis)
+# DAFTAR JENIS PERUBAHAN (bagian ZZZ dari kode — pilih SATU yang paling sesuai dengan jenis perubahan tiap task teknis)
 ${DAFTAR_KODE_PERUBAHAN}
 
+${ATURAN_RAKIT_KODE}
+
 # ATURAN PENGISIAN FIELD (untuk setiap task yang TEKNIS)
-- kode_perubahan: WAJIB diisi salah satu kode PS-03-00-XXX di atas berdasarkan kecocokan jenis perubahan/deskripsi task.
+- kode_perubahan: WAJIB diisi kode lengkap berformat PS-03-YY-ZZZ. Bagian ZZZ diambil dari daftar jenis perubahan di atas (001-009) sesuai kecocokan jenis perubahan/deskripsi task. Bagian YY ditentukan dari LOKASI task: isi "02" bila lokasi termasuk aplikasi TIM FOKUS YANLIK, atau "00" bila lokasi DI LUAR tim fokus yanlik. XX selalu "03". (Lihat pengelompokan lokasi di bawah.)
 - tanggal_mulai: tanggal "Created" pada task, format dd-mmm-yyyy (contoh: 14-Jul-2026).
 - tanggal_selesai: tanggal task tersebut selesai (pakai tanggal "Resolved" jika ada; jika task belum selesai, kosongkan), format dd-mmm-yyyy.
 - pelaksana: nama Assignee task.
-- lokasi: WAJIB salah satu dari DAFTAR BAKU berikut (tulis PERSIS sesuai ejaan di daftar ini, jangan bikin variasi/singkatan sendiri):
+- lokasi: WAJIB salah satu dari DAFTAR BAKU berikut (tulis PERSIS sesuai ejaan di daftar ini, jangan bikin variasi/singkatan sendiri). Daftar dibagi dua kelompok — kelompok inilah yang menentukan bagian YY pada kode_perubahan:
+  KELOMPOK A — aplikasi TIM FOKUS YANLIK (digitalisasi layanan). Lokasi di kelompok ini -> kode PS-03-02-ZZZ:
   1. Web Komdigi
   2. Backoffice Web Komdigi
   3. OSS Hub
@@ -197,9 +224,14 @@ ${DAFTAR_KODE_PERUBAHAN}
   6. Seleksi
   7. JDIH
   8. Simponi Gateway
-  Cara menentukan: lihat tag di awal judul task (mis. "[Seleksi] Pendampingan...", "[OSSHUB] Upgrade...", "[JDIH] Perbaikan...", "[ShortUrl] Isu edit..."), lalu petakan ke daftar baku di atas (case-insensitive, abaikan variasi ejaan/spasi) — contoh: "OSS", "Oss", "OSSHUB", "Oss Hub" semua -> "OSS Hub"; "shorturl", "ShortUrl" -> "ShortURL"; "seleksi" -> "Seleksi". Kalau tidak ada tag di judul, simpulkan dari konteks/isi Description mana dari 8 sistem di atas yang paling relevan. Kalau benar-benar tidak bisa disimpulkan sama sekali dari salah satu 8 sistem itu, baru kosongkan.
-  Catatan khusus task infrastruktur/database/server: kalau kerja fisiknya pada infrastruktur yang mendukung salah satu dari 8 sistem (mis. pembuatan user database JDIH, partisi tabel database aplikasi, instalasi monitoring di server aplikasi), task itu TETAP masuk "perubahan_teknis" dan lokasi diisi sistem aplikasi yang didukungnya. Contoh: "Pembuatan User Read-Only Database JDIH Production untuk akses Metabase" -> lokasi "JDIH", karena perubahannya dilakukan pada database JDIH, bukan di dalam Metabase.
-  PENTING: Metabase, Grafana, dan Prometheus adalah tool terpisah di LUAR 8 sistem — task yang kerja fisiknya di dalam tool-tool itu tidak punya lokasi yang valid dan masuk "task_lain".
+  KELOMPOK B — aplikasi DI LUAR tim fokus yanlik. Lokasi di kelompok ini -> kode PS-03-00-ZZZ:
+  9. Komso Komdigi  (tag di judul biasanya tertulis "Kosmo" / "[Kosmo]" -> nama bakunya "Komso Komdigi")
+  10. Portal komdigi  (tag di judul biasanya tertulis "Portal Komdigi" / "[Portal]" di luar Portal Layanan Publik -> nama bakunya "Portal komdigi")
+  Kalau ketemu aplikasi/sistem lain yang jelas BUKAN bagian dari 8 aplikasi tim fokus yanlik dan belum terdaftar di kelompok B, tetap catat lokasinya dengan nama yang wajar (jangan dikosongkan) dan perlakukan sebagai DI LUAR tim fokus yanlik -> kode PS-03-00-ZZZ.
+  Cara menentukan: lihat tag di awal judul task (mis. "[Seleksi] Pendampingan...", "[OSSHUB] Upgrade...", "[JDIH] Perbaikan...", "[ShortUrl] Isu edit...", "[Kosmo] ...", "[Portal Komdigi] ..."), lalu petakan ke daftar baku di atas (case-insensitive, abaikan variasi ejaan/spasi) — contoh: "OSS", "Oss", "OSSHUB", "Oss Hub" semua -> "OSS Hub"; "shorturl", "ShortUrl" -> "ShortURL"; "seleksi" -> "Seleksi"; "Kosmo" -> "Komso Komdigi"; "Portal Komdigi" -> "Portal komdigi". Kalau tidak ada tag di judul, simpulkan dari konteks/isi Description aplikasi mana yang paling relevan. Kalau benar-benar tidak bisa disimpulkan sama sekali, baru kosongkan.
+  PENTING soal YY: setelah lokasi ditentukan, pastikan bagian YY pada kode_perubahan cocok dengan kelompok lokasi itu (Kelompok A -> 02, Kelompok B -> 00). Bagian XX (03) dan ZZZ (jenis) tidak terpengaruh oleh tim. Kalau lokasi benar-benar tidak bisa ditentukan (dikosongkan), default-kan YY ke "02" karena board/proyek sumbernya adalah YANLIK (tim fokus yanlik).
+  Catatan khusus task infrastruktur/database/server: kalau kerja fisiknya pada infrastruktur yang mendukung salah satu aplikasi di daftar (mis. pembuatan user database JDIH, partisi tabel database aplikasi, instalasi monitoring di server aplikasi), task itu TETAP masuk "perubahan_teknis" dan lokasi diisi sistem aplikasi yang didukungnya. Contoh: "Pembuatan User Read-Only Database JDIH Production untuk akses Metabase" -> lokasi "JDIH" (Kelompok A -> PS-03-02-ZZZ), karena perubahannya dilakukan pada database JDIH, bukan di dalam Metabase.
+  PENTING: Metabase, Grafana, dan Prometheus adalah tool terpisah di LUAR daftar aplikasi — task yang kerja fisiknya di dalam tool-tool itu tidak punya lokasi yang valid dan masuk "task_lain".
 
 
 - status_perubahan: dropdown, HANYA salah satu dari "Planned" | "In Progress" | "Closed".

@@ -7,7 +7,7 @@ Otomatisasi untuk mengubah export task Jira (sprint report) menjadi baris-baris 
 - Upload file export Jira (`.pdf`, `.docx`, `.txt`) atau paste teks manual.
 - AI (Gemini) otomatis:
   - Memilah task **teknis** (masuk sheet) vs **non-teknis** — testing, dokumentasi, Helpdesk (ditampilkan terpisah, tidak masuk sheet).
-  - Mengisi kode perubahan (PS-03-00-XXX), tanggal, status, lokasi/sistem, inisiasi, detail, hasil, dan dampak sesuai aturan yang sudah ditanam di prompt.
+  - Mengisi kode perubahan (PS-03-YY-ZZZ — bagian YY otomatis `02` untuk aplikasi tim fokus yanlik dan `00` untuk aplikasi di luar yanlik), tanggal, status, lokasi/sistem, inisiasi, detail, hasil, dan dampak sesuai aturan yang sudah ditanam di prompt.
 - Setiap generate membuat **tab baru** di Google Sheets (tidak menimpa data lama), lengkap dengan header.
 - Loading screen dengan progress bar + karakter kucing pixel-art.
 
