@@ -253,7 +253,7 @@ export default function Home() {
             <div className={styles.stage}>
               <div
                 className={styles.cat}
-                style={{ left: `calc(progress{progress}% -progress{progress * 0.7}px)` }}
+                style={{ left: `calc(${progress}% - ${progress * 0.7}px)` }}
               >
                 <div className={styles.catImgWrap}>
                   {/* eslint-disable-next-line @next/next/no-img-element */}

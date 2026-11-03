@@ -1,127 +1,172 @@
 # Sprint → Sheet 🐾
 
-Otomatisasi untuk mengubah export task Jira (sprint report) menjadi baris-baris Change Log/Sprint Report yang rapi di Google Sheets — lengkap dengan klasifikasi task teknis vs non-teknis, pemetaan kode perubahan, dan tab baru otomatis setiap kali generate.
+Aplikasi otomatisasi untuk mengubah task Jira (sprint report) menjadi dokumen pelaporan rapi di Google Sheets menggunakan Next.js dan Gemini AI.
 
-## ✨ Fitur
+Tersedia 2 modul utama yang dapat diakses melalui Sidebar di sisi kiri:
+1. **TI Standar (`/`)**: Mengubah sprint Jira / file export menjadi baris **Change Log** (format kode `PS-03-YY-ZZZ`) di Google Sheets.
+2. **Monthly (`/monthly`)**: Menyusun **Laporan Capaian Layanan Publik 10 Kolom (Yanlik)** dari sprint Jira bulanan ke Google Sheets, lengkap dengan grouping AI multi-tahap dan pelacakan tiket follow-up pemohon.
 
-- Upload file export Jira (`.pdf`, `.docx`, `.txt`) atau paste teks manual.
-- AI (Gemini) otomatis:
-  - Memilah task **teknis** (masuk sheet) vs **non-teknis** — testing, dokumentasi, Helpdesk (ditampilkan terpisah, tidak masuk sheet).
-  - Mengisi kode perubahan (PS-03-YY-ZZZ — bagian YY otomatis `02` untuk aplikasi tim fokus yanlik dan `00` untuk aplikasi di luar yanlik), tanggal, status, lokasi/sistem, inisiasi, detail, hasil, dan dampak sesuai aturan yang sudah ditanam di prompt.
-- Setiap generate membuat **tab baru** di Google Sheets (tidak menimpa data lama), lengkap dengan header.
-- Loading screen dengan progress bar + karakter kucing pixel-art.
+---
+
+## ✨ Fitur Utama
+
+### 1. Modul TI Standar (Change Log Sprint)
+- **Sumber Data Fleksibel:** Integrasi langsung Jira Cloud API, upload dokumen export Jira (`.docx`, `.txt`), atau paste teks manual.
+- **Klasifikasi AI Gemini:**
+  - Memilah task **teknis** (masuk sheet) vs **non-teknis** (dokumentasi, QA/testing mandiri, helpdesk).
+  - Merakit kode perubahan otomatis (`PS-03-YY-ZZZ` di mana `YY=02` untuk aplikasi Yanlik dan `YY=00` untuk aplikasi non-yanlik).
+  - Mengisi tanggal, status, sistem/lokasi, inisiasi, detail, hasil, dan dampak.
+- **Re-include Manual:** Pengguna dapat mencentang task non-teknis agar dipaksa masuk ke tabel teknis jika diinginkan.
+- **Tulis ke Sheets:** Membuat tab baru otomatis di spreadsheet Change Log.
+
+### 2. Modul Monthly (Laporan Capaian Yanlik 10 Kolom)
+- **Sprint Picker Cerdas:** Filter sprint berdasarkan bulan dan pemilihan sprint (hingga 5 sprint sekaligus) dengan deteksi carry-over duplikat tiket.
+- **Prefilter Deterministik:** Otomatis memisahkan tiket atas nama assignee tertentu (Rafli Aran & Eryan) sebelum pemrosesan AI untuk menghemat kuota token.
+- **Pipeline Gemini AI 2-Tahap:**
+  - **Tahap 1 (Evaluasi):** Memfilter 7 aplikasi Yanlik (*Web Komdigi, ShortURL, Seleksi, Portal Layanan Publik, OSS Hub, JDIH Komdigi, Gateway Simponi*) dan mengecualikan pekerjaan desain mockup murni / testing QA / administrasi.
+  - **Tahap 2 (Grouping):** Mengelompokkan tiket-tiket sejenis/semodul menjadi satu baris kegiatan capaian yang koheren tanpa ada tiket yang tercecer.
+- **Preview Interaktif 3-Tab:**
+  - **Tab 1 (Tabel Utama):** 10 kolom laporan capaian. Sel dapat diedit langsung, serta mendukung tambah dan hapus baris.
+  - **Tab 2 (Tidak Masuk Laporan):** Daftar tiket yang dikecualikan beserta alasan penolakannya (tampilan kontras tinggi).
+  - **Tab 3 (Rekapitulasi & Validasi):** Rekap kuantitatif tiket masuk, baris gabungan, duplikat, dan tiket yang membutuhkan verifikasi manusia.
+- **Tulis 2 Tab ke Google Sheets:**
+  - **Tab 1 (`Monthly [Bulan]`):** Format 10 kolom standar (kolom `PEMOHON` sengaja dikosongkan untuk diisi manual).
+  - **Tab 2 (`Follow-up Pemohon [Bulan]`):** 8 kolom data pendukung (Reporter, Jira ID, Summary, Kegiatan, Baris Ke, Status Follow-up, Pemohon, Link Jira).
+- **Preservasi Data Follow-up:** Jika tab ditimpa (*re-commit*), isian manual user pada kolom `Status Follow-up` dan `Pemohon` di Google Sheets **tidak akan terhapus / tetap tersimpan**.
+- **Dialog Keamanan:** Peringatan sebelum menimpa tab yang sudah ada dan peringatan jika melakukan *Generate Ulang* saat tabel preview telah diedit manual.
+
+---
 
 ## 🧰 Prasyarat
 
-- Node.js 18+ dan npm
-- Akun Google (untuk Gemini API key & Google Sheets API)
-- Satu Google Spreadsheet kosong yang akan dipakai sebagai tujuan
+- **Node.js 18+** dan **npm**
+- **Google Gemini API Key** (Google AI Studio)
+- **Google Cloud Service Account** (dengan API Google Sheets aktif)
+- **2 Google Spreadsheet kosong** (atau 1 spreadsheet dengan tab berbeda):
+  1. Spreadsheet untuk Change Log TI Standar
+  2. Spreadsheet untuk Laporan Monthly Yanlik
+- **Akun Jira Cloud** (Email + API Token)
+
+---
 
 ## 🚀 Instalasi
 
-```bash
-git clone <url-repo-ini>
-cd <folder-repo>
-npm install
-```
+1. Clone repositori dan masuk ke direktori:
+   ```bash
+   git clone <url-repo-ini>
+   cd auto-sprint-doc
+   ```
 
-Pastikan juga sudah install dependency AI-nya (kalau belum ada di `package.json`):
+2. Install dependensi:
+   ```bash
+   npm install
+   ```
 
-```bash
-npm install @google/genai googleapis mammoth pdf-parse-fork
-```
+3. Pastikan aset pixel loader tersedia di folder `public/`:
+   - `cat-loading-base.png`
+   - `cat-pupil-left.png`
+   - `cat-pupil-right.png`
 
-Taruh 3 file gambar kucing (`cat-loading-base.png`, `cat-pupil-left.png`, `cat-pupil-right.png`) ke folder `public/` di root project (sejajar dengan folder `app/`).
+---
 
 ## 🔑 Setup Environment Variables
 
-Buat file `.env.local` di root project (sejajar `package.json`), isi 3 variabel berikut:
+Buat atau perbarui file `.env.local` di root project:
 
 ```env
-GEMINI_API_KEY=
-GOOGLE_SERVICE_ACCOUNT_JSON=
-SPREADSHEET_ID=
+# Google Gemini AI
+GEMINI_API_KEY=AIzaSy...
 
-# Jira API (wajib HANYA kalau pakai mode ⚡ Dari Jira)
-JIRA_BASE_URL=https://xxxxxx.atlassian.net
-JIRA_EMAIL=
-JIRA_API_TOKEN=
+# Google Cloud Service Account (satu baris penuh JSON)
+GOOGLE_SERVICE_ACCOUNT_JSON={"type":"service_account","project_id":"...","private_key":"-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n","client_email":"..."}
+
+# Spreadsheet Change Log (Menu: TI Standar)
+SPREADSHEET_ID=1abc...
+
+# Spreadsheet Laporan Bulanan (Menu: Monthly)
+SPREADSHEET_ID_MONTHLY=1xyz...
+
+# Jira Cloud API
+JIRA_BASE_URL=https://namaorganisasi.atlassian.net
+JIRA_EMAIL=email_kamu@domain.com
+JIRA_API_TOKEN=token_jira_kamu
 JIRA_PROJECT_KEY=YANLIK
 ```
 
-### 1. `GEMINI_API_KEY`
+### Panduan Singkat Variabel:
 
-1. Buka [Google AI Studio](https://aistudio.google.com/apikey).
-2. Login pakai akun Google kamu.
-3. Klik **Create API key** (atau **Get API key** → **Create API key in new project**).
-4. Copy API key yang muncul, paste ke `GEMINI_API_KEY` di `.env.local`.
+1. **`GEMINI_API_KEY`**: Didapatkan dari [Google AI Studio](https://aistudio.google.com/apikey).
+2. **`GOOGLE_SERVICE_ACCOUNT_JSON`**: Service Account dari Google Cloud Console dengan Google Sheets API aktif. Unduh key JSON, lalu masukkan seluruh isi file JSON tersebut dalam satu baris.
+3. **`SPREADSHEET_ID` & `SPREADSHEET_ID_MONTHLY`**:
+   - Diambil dari URL Google Sheets: `https://docs.google.com/spreadsheets/d/`**`<ID_SPREADSHEET>`**`/edit`.
+   - **PENTING:** Buka masing-masing Google Spreadsheet di browser, klik **Share (Bagikan)**, lalu tambahkan email `client_email` dari Service Account sebagai **Editor**.
+4. **`JIRA_API_TOKEN`**: Dibuat dari [Atlassian API Tokens](https://id.atlassian.com/manage-profile/security/api-tokens).
 
-> ⚠️ Jangan commit API key ini ke GitHub. File `.env.local` sudah otomatis di-ignore lewat `.gitignore` (lihat di bawah).
+---
 
-### 2. `GOOGLE_SERVICE_ACCOUNT_JSON`
+## ▶️ Menjalankan Aplikasi
 
-Ini dipakai supaya server bisa menulis ke Google Sheets kamu atas nama "robot" (service account), bukan akun pribadi.
-
-1. Buka [Google Cloud Console](https://console.cloud.google.com/).
-2. Buat project baru (atau pakai project yang sudah ada) lewat dropdown project di kiri atas.
-3. Di search bar atas, cari **"Google Sheets API"** → buka halamannya → klik **Enable**.
-4. Di menu kiri, buka **IAM & Admin** → **Service Accounts** → klik **Create Service Account**.
-5. Isi nama bebas (mis. `sprint-sheet-bot`) → **Create and Continue** → role bisa di-skip (klik **Continue**) → **Done**.
-6. Klik service account yang baru dibuat → tab **Keys** → **Add Key** → **Create new key** → pilih **JSON** → **Create**.
-7. File JSON otomatis ke-download. Buka file itu, copy **seluruh isinya** (satu baris penuh, minify), lalu paste sebagai value `GOOGLE_SERVICE_ACCOUNT_JSON` di `.env.local`.
-   - Karena ini JSON di dalam file `.env`, pastikan tetap dalam **satu baris** tanpa line break. Contoh:
-     ```env
-     GOOGLE_SERVICE_ACCOUNT_JSON={"type":"service_account","project_id":"...","private_key":"-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n",...}
-     ```
-8. **Penting:** buka Google Spreadsheet tujuan kamu → klik **Share/Bagikan** → tambahkan email service account (bentuknya seperti `sprint-sheet-bot@nama-project.iam.gserviceaccount.com`, ada di file JSON field `client_email`) → beri akses **Editor**. Tanpa langkah ini, server akan gagal menulis ke sheet (error permission denied).
-
-### 3. `SPREADSHEET_ID`
-
-1. Buka Google Spreadsheet tujuan kamu di browser.
-2. Lihat URL-nya, formatnya:
-   ```
-   https://docs.google.com/spreadsheets/d/SPREADSHEET_ID_ADA_DI_SINI/edit
-   ```
-3. Copy bagian `SPREADSHEET_ID_ADA_DI_SINI` (antara `/d/` dan `/edit`), paste ke `.env.local`.
-
-## ▶️ Menjalankan
+Jalankan server development:
 
 ```bash
 npm run dev
 ```
 
-Buka `http://localhost:3000`.
+Buka browser di [http://localhost:3000](http://localhost:3000):
+- Buka `/` untuk menu **TI Standar** (Sprint Change Log).
+- Buka `/monthly` untuk menu **Monthly** (Laporan Capaian Layanan Publik).
 
-## 📋 Cara Export Data dari Jira
+---
 
-1. Buka board/project Jira kamu → masuk ke menu **List**.
-2. Klik ikon **titik tiga (⋯)** di pojok kanan atas.
-3. Pilih **Export**.
-4. Pilih format **Docs** (Word/HTML).
-5. File akan ke-download — tinggal upload file itu langsung ke web app ini (drag & drop / pilih file), tanpa perlu diedit dulu.
-
-## 📁 Struktur Project (relevan)
+## 📁 Struktur Project
 
 ```
-app/
-  page.tsx           # UI utama (upload, loading screen, hasil)
-  page.module.css    # Semua styling (CSS Module)
-  api/
-    generate/
-      route.ts       # Ekstraksi teks -> panggil Gemini -> tulis ke Google Sheets
-public/
-  cat-loading-base.png
-  cat-pupil-left.png
-  cat-pupil-right.png
-.env.local           # Kredensial (JANGAN di-commit)
+├── app/
+│   ├── layout.tsx                     # Root layout & inisialisasi AppShell
+│   ├── page.tsx                       # UI Menu TI Standar (Sprint -> Change Log)
+│   ├── page.module.css                # Styling menu TI Standar
+│   ├── monthly/
+│   │   ├── page.tsx                   # UI Menu Monthly (Sprint Picker, Preview 3-Tab, Commit)
+│   │   └── monthly.module.css         # Styling menu Monthly & tabel preview
+│   ├── components/
+│   │   ├── AppShell.tsx               # Wrapper layout + Sidebar
+│   │   ├── Sidebar.tsx                # Navigasi kiri (TI Standar & Monthly)
+│   │   ├── SprintPicker.tsx           # Komponen pemilih sprint bulanan
+│   │   └── LoadingOverlay.tsx         # Modal loading pixel art dengan progress bar
+│   ├── types/
+│   │   └── monthly.ts                 # Definisi tipe data modul Monthly
+│   ├── lib/
+│   │   ├── jira.ts                    # Klien Jira REST API (Agile & JQL)
+│   │   ├── monthly.ts                 # Logika bisnis Monthly (Prefilter, AI Tahap 1 & 2)
+│   │   └── sheets.ts                  # Integrasi Google Sheets API (Styling & Preservasi)
+│   └── api/
+│       ├── sprints/route.ts           # Endpoint daftar sprint aktif/terbaru
+│       ├── generate/route.ts          # Endpoint generate Change Log TI Standar
+│       ├── commit/route.ts            # Endpoint commit Change Log TI Standar
+│       └── monthly/
+│           ├── generate/route.ts      # Pipeline AI Laporan Monthly
+│           └── commit/route.ts        # Penulisan 2 Tab ke SPREADSHEET_ID_MONTHLY
+├── public/                            # Aset ikon dan pixel art kucing
+├── .env.local                         # Kredensial lokal (jangan di-commit ke Git)
+└── README.md                          # Panduan dokumentasi proyek
 ```
 
-## 🛠️ Troubleshooting Singkat
+---
 
-- **Error 404 model Gemini** → Google cukup sering retire model lama. Cek [dokumentasi model Gemini terbaru](https://ai.google.dev/gemini-api/docs/models) dan ganti nilai `MODEL_NAME` di `app/api/generate/route.ts`.
-- **Error permission saat nulis ke Sheets** → pastikan email service account (`client_email` di JSON) sudah di-share sebagai Editor di spreadsheet tujuan.
-- **AI mengembalikan format tidak valid / kepotong** → dokumen terlalu panjang, coba split jadi beberapa bagian lebih kecil.
+## 🛠️ Verifikasi & Kode Kualitas
+
+Untuk memeriksa keabsahan type checking TypeScript:
+```bash
+npx tsc --noEmit
+```
+
+Untuk menjalankan linter ESLint:
+```bash
+npm run lint
+```
+
+---
 
 ## 📄 Lisensi
 
-Internal use — sesuaikan dengan kebutuhan tim kamu.
+Internal use — sesuaikan dengan kebutuhan tim dan organisasi Anda.

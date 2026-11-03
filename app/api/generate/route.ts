@@ -84,9 +84,9 @@ const DAFTAR_KODE_PERUBAHAN = `
 002 | Penambahan atau penghapusan akun pengguna aplikasi | Menambah atau menghapus user dari database aplikasi oleh tim developer.
 003 | Reset password pengguna aplikasi | Mengatur ulang kata sandi user atas permintaan pengguna, dilakukan oleh BE admin atau agent aplikasi level 1.
 004 | Pengelolaan hak akses atau peran pengguna | Mengubah role user aplikasi berdasarkan permintaan, dilakukan oleh BE admin atau agent aplikasi level 1.
-005 | Update konten dinamis dalam aplikasi | Mengubah teks, gambar, atau dokumen (banner, artikel, konten lain), dilakukan oleh BE admin atau agent aplikasi level 1.
+005 | Update konten dinamis dalam aplikasi | Mengubah teks, gambar, atau dokumen (banner, artikel, konten lain), dilakukan oleh BE admin atau agent aplikasi level 1. Termasuk perancangan desain UI/UX, mockup Figma/wireframe, dan pembuatan aset visual aplikasi.
 006 | Perbaikan isu/bug minor pada fitur aplikasi | Isu yang menyebabkan ketidaknyamanan/gangguan kecil tapi tidak mengganggu fungsi utama dan tidak menyebabkan crash/gagal akses (UI tidak rapi, typo, loading lama tapi selesai, fitur sekunder tidak sempurna).
-007 | Penambahan fitur minor pada aplikasi | Fitur baru yang meningkatkan kenyamanan/efisiensi/estetika tapi tidak berdampak ke fungsi utama (UI, share/simpan data, notifikasi, navigasi, dll).
+007 | Penambahan fitur minor pada aplikasi | Fitur baru yang meningkatkan kenyamanan/efisiensi/estetika tapi tidak berdampak ke fungsi utama (implementasi koding fitur UI, share/simpan data, notifikasi, navigasi, dll oleh developer; BUKAN sebatas file desain/mockup).
 008 | Update sistem dan keamanan bersifat minor | Patch minor tanpa reboot/downtime, update sertifikat SSL sebelum expired (tanpa ubah konfigurasi), update library pihak ketiga yang sudah diuji di staging dan tidak berdampak ke core logic.
 009 | Migrasi data | Proses migrasi berulang dengan risiko rendah yang sudah diketahui, dilakukan di lingkungan dev/test dan tidak menyentuh data sensitif/layanan utama langsung.
 `.trim();
@@ -176,12 +176,18 @@ Task yang TIDAK masuk ke "perubahan_teknis" (masukkan ke "task_lain" saja, cukup
 - Task yang dikerjakan DI DALAM tool BI Metabase: pembuatan/edit dashboard, chart, visualisasi, query, atau koleksi Metabase. Metabase adalah tool analitik di luar 8 sistem aplikasi, jadi perubahan di dalamnya bukan perubahan aplikasi. Pembeda pentingnya: kalau kerjanya pada DATABASE/server/aplikasi (mis. membuat user DB agar bisa diakses Metabase, mempartisi tabel database), itu TETAP masuk "perubahan_teknis" — yang keluar ke "task_lain" HANYA kalau kerjanya dilakukan di dalam Metabase itu sendiri (dashboard/query/chart).
 
 ATURAN KHUSUS TASK DESAIN UI/UX DAN TAMPILAN APLIKASI (SANGAT PENTING, JANGAN SALAH KLASIFIKASI):
-Task desain yang targetnya adalah aplikasi/sistem (Web Komdigi, Backoffice, OSS Hub, Portal Layanan Publik, Kosmo, Portal Komdigi, dll) ADALAH PERUBAHAN TEKNIS dan WAJIB masuk ke "perubahan_teknis". Contoh yang MASUK (bukan task_lain):
-- "Desain UI/UX Tampilan Data Monev Pengadaan (...)" -> pembangunan tampilan baru di aplikasi -> perubahan_teknis (jenis ZZZ = 007; kode lengkap PS-03-YY-007, YY tergantung lokasi aplikasinya)
-- "Onboarding screen", "Offline screen", "Error state on Login screen" -> pembangunan/perbaikan tampilan aplikasi -> perubahan_teknis
-- "Tampilan Check in & Check out Pada Dashboard Portal" -> perubahan tampilan dashboard aplikasi -> perubahan_teknis
-- "Revisi Logo <nama aplikasi/sistem>" -> perubahan aset visual di dalam aplikasi -> perubahan_teknis (jenis ZZZ = 005; kode lengkap PS-03-YY-005, YY tergantung lokasi aplikasinya)
-Cara membedakannya: kalau output desain tersebut akan DIIMPLEMENTASIKAN/di-render di dalam salah satu sistem di daftar lokasi, itu teknis. Kalau outputnya hanya file gambar/dokumen untuk publikasi, laporan, atau keperluan administratif di luar aplikasi, itu non-teknis. Kehadiran tag sistem di judul (mis. [Web Komdigi], [Kosmo], [Portal Komdigi]) adalah petanda kuat task tersebut teknis.
+Task desain yang targetnya adalah aplikasi/sistem (Web Komdigi, Backoffice, OSS Hub, Portal Layanan Publik, Kosmo, Portal Komdigi, dll) ADALAH PERUBAHAN TEKNIS dan WAJIB masuk ke "perubahan_teknis" dengan KODE JENIS ZZZ = 005 (BUKAN 007).
+Alasan: Task perancangan desain menghasilkan aset visual / rancangan antarmuka (mockup Figma, wireframe, layout screen, aset grafis) dan belum berupa implementasi/deploy fitur di kode program. Oleh karena itu, seluruh task perancangan desain UI/UX dan aset visual dikelompokkan ke ZZZ = 005 (Update konten dinamis / aset visual aplikasi; kode lengkap PS-03-YY-005, YY tergantung lokasi aplikasinya).
+Kode ZZZ = 007 (Penambahan fitur minor) HANYA untuk pengerjaan/implementasi fitur di kode program oleh developer/programmer (sudah tahap koding/slicing/development).
+
+Contoh task desain yang MASUK ke perubahan_teknis (ZZZ = 005):
+- "Pembuatan desain UI antarmuka toggle sidebar dark mode pada Portal Komdigi" -> perancangan visual antarmuka -> perubahan_teknis (jenis ZZZ = 005; kode lengkap PS-03-00-005)
+- "Desain UI/UX Tampilan Data Monev Pengadaan (...)" -> perancangan visual antarmuka -> perubahan_teknis (jenis ZZZ = 005; kode lengkap PS-03-YY-005, YY tergantung lokasi aplikasinya)
+- "Onboarding screen", "Offline screen", "Error state on Login screen" (jika berupa task perancangan UI/UX) -> perancangan aset visual/tampilan -> perubahan_teknis (jenis ZZZ = 005)
+- "Tampilan Check in & Check out Pada Dashboard Portal" (task perancangan desain) -> perancangan visual antarmuka -> perubahan_teknis (jenis ZZZ = 005)
+- "Revisi Logo <nama aplikasi/sistem>", "Banner promosi" -> perubahan aset visual di dalam aplikasi -> perubahan_teknis (jenis ZZZ = 005)
+
+Cara membedakannya dengan non-teknis: kalau output desain tersebut akan DIIMPLEMENTASIKAN/di-render di dalam salah satu sistem di daftar lokasi, itu teknis (005). Kalau outputnya hanya file gambar/dokumen untuk publikasi sosial media, campaign, laporan, atau keperluan administratif di luar aplikasi, itu non-teknis (masuk task_lain). Kehadiran tag sistem di judul (mis. [Web Komdigi], [Kosmo], [Portal Komdigi]) adalah petanda kuat task tersebut teknis.
 
 Sebelum memutuskan sebuah task masuk "perubahan_teknis", cek DUA hal secara berurutan:
 1. Apakah judulnya diawali tag [Helpdesk], [Dokumentasi], atau sejenisnya yang menandakan non-teknis? Kalau ya -> langsung ke "task_lain", JANGAN dipertimbangkan lagi meskipun isinya terdengar teknis.

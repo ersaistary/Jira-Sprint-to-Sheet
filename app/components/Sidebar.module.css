@@ -1,0 +1,158 @@
+.sidebar {
+  width: 240px;
+  min-width: 240px;
+  background: #f7f7f5;
+  border-right: 4px solid #34363d;
+  display: flex;
+  flex-direction: column;
+  padding: 24px 16px;
+  font-family: 'Courier New', monospace;
+  box-shadow: 4px 0 0 rgba(52, 54, 61, 0.08);
+  z-index: 10;
+  user-select: none;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 4px 20px 4px;
+  border-bottom: 2px dashed #b9c0c8;
+  margin-bottom: 24px;
+}
+
+.brandIcon {
+  font-size: 22px;
+  line-height: 1;
+}
+
+.brandText {
+  display: flex;
+  flex-direction: column;
+}
+
+.brandTitle {
+  font-size: 14px;
+  font-weight: 900;
+  color: #34363d;
+  letter-spacing: 1px;
+}
+
+.brandSub {
+  font-size: 10px;
+  color: #6b717c;
+}
+
+.navList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.navItem {
+  margin: 0;
+  padding: 0;
+}
+
+.navLink {
+  display: flex;
+  flex-direction: column;
+  padding: 12px 14px;
+  border: 3px solid #34363d;
+  background: #ffffff;
+  color: #34363d;
+  text-decoration: none;
+  box-shadow: 3px 3px 0 #34363d;
+  transition: transform 0.08s ease, box-shadow 0.08s ease, background 0.1s ease;
+  position: relative;
+}
+
+.navLink:hover {
+  transform: translate(-1px, -1px);
+  box-shadow: 4px 4px 0 #34363d;
+  background: #fffdf5;
+}
+
+.navLink:active {
+  transform: translate(2px, 2px);
+  box-shadow: 1px 1px 0 #34363d;
+}
+
+.navLinkActive {
+  background: #ffd24a;
+  box-shadow: 4px 4px 0 #34363d;
+}
+
+.navLinkActive:hover {
+  background: #ffcb32;
+}
+
+.menuHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.menuIcon {
+  font-size: 14px;
+}
+
+.menuTitle {
+  font-size: 13px;
+  font-weight: 900;
+  letter-spacing: 0.5px;
+}
+
+.menuSubtitle {
+  font-size: 10px;
+  color: #6b717c;
+  margin-top: 4px;
+}
+
+.navLinkActive .menuSubtitle {
+  color: #44474f;
+  font-weight: 600;
+}
+
+.footer {
+  margin-top: auto;
+  padding-top: 20px;
+  border-top: 2px dashed #b9c0c8;
+  font-size: 10px;
+  color: #8c939e;
+  text-align: center;
+}
+
+/* Responsiveness untuk layar kecil */
+@media (max-width: 768px) {
+  .sidebar {
+    width: 100%;
+    min-width: 100%;
+    border-right: none;
+    border-bottom: 4px solid #34363d;
+    box-shadow: 0 4px 0 rgba(52, 54, 61, 0.08);
+    padding: 16px;
+  }
+
+  .brand {
+    margin-bottom: 12px;
+    padding-bottom: 12px;
+  }
+
+  .navList {
+    flex-direction: row;
+    gap: 8px;
+  }
+
+  .navItem {
+    flex: 1;
+  }
+
+  .footer {
+    display: none;
+  }
+}
+

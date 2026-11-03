@@ -1,3 +1,4 @@
+import type { MonthlySourceTask } from '../types/monthly';
 // app/lib/jira.ts
 // Helper untuk mengambil task dari Jira Cloud REST API (read-only).
 //
@@ -99,11 +100,17 @@ async function getRecentClosedSprints(boardId: number): Promise<Sprint[]> {
 // Untuk dropdown pemilihan sprint manual: 5 sprint terbaru saja (sudah disortir
 // terbaru duluan oleh getRecentClosedSprints), cukup id/name/state ke browser.
 export async function getRecentSprints(): Promise<
-  { id: number; name: string; state: string }[]
+  { id: number; name: string; state: string; startDate?: string; endDate?: string }[]
 > {
   const boardId = await findBoardId();
   const sprints = await getRecentClosedSprints(boardId);
-  return sprints.slice(0, 5).map((s) => ({ id: s.id, name: s.name, state: s.state }));
+  return sprints.slice(0, 5).map((s) => ({
+    id: s.id,
+    name: s.name,
+    state: s.state,
+    startDate: s.startDate,
+    endDate: s.endDate,
+  }));
 }
 
 
@@ -113,6 +120,7 @@ type JiraIssue = {
     summary: string;
     status?: { name?: string };
     assignee?: { displayName?: string; name?: string } | null;
+    reporter?: { displayName?: string; name?: string } | null;
     created?: string;
     resolutiondate?: string | null;
     description?: any;
@@ -410,4 +418,98 @@ export async function fetchIssuesByKeys(issueKeys: string[]): Promise<string> {
   }
 
   return parts.join('\n\n');
+}
+
+
+
+export type MonthlyFetchResult = {
+  tasks: MonthlySourceTask[];
+  totalEntries: number;
+  uniqueCount: number;
+  duplicateEntries: number;
+  duplicateKeys: string[];
+  sprints: { id: number; name: string }[];
+};
+
+export async function fetchMonthlyTasks(sprintIds: number[]): Promise<MonthlyFetchResult> {
+  if (!Array.isArray(sprintIds) || sprintIds.length === 0) {
+    throw new Error('Pilih minimal 1 sprint untuk diproses.');
+  }
+
+  const sprints = await resolveSprintsByIds(sprintIds);
+  const tasksMap = new Map<string, MonthlySourceTask>();
+  const duplicateKeysSet = new Set<string>();
+  let totalEntries = 0;
+  let duplicateEntries = 0;
+
+  for (const sprint of sprints) {
+    console.log('[Jira Monthly] Mengambil task untuk sprint "' + sprint.name + '" (ID: ' + sprint.id + ')...');
+    const jql = 'project = ' + PROJECT_KEY + ' AND sprint = ' + sprint.id + ' ORDER BY created ASC';
+    const issues = await searchIssues(jql);
+    console.log('[Jira Monthly] Sprint "' + sprint.name + '": ' + issues.length + ' issue');
+
+    for (const issue of issues) {
+      totalEntries++;
+      const f = issue.fields;
+      const key = issue.key;
+
+      let commentsText = '';
+      const comments = (f.comment && f.comment.comments) ?? [];
+      for (let c = 0; c < comments.length; c++) {
+        const author = comments[c]?.author?.displayName || '?';
+        const body = extractText(comments[c].body).trim();
+        if (body.length > 3) {
+          commentsText += '[' + author + ']: ' + body + '\n';
+        }
+      }
+
+      const assigneeName =
+        (f.assignee && (f.assignee.displayName || f.assignee.name)) || 'Unassigned';
+      const reporterName =
+        (f.reporter && (f.reporter.displayName || f.reporter.name)) || 'Unassigned';
+      const descriptionText = extractText(f.description).trim();
+      const issueUrl = requireBaseUrl() + '/browse/' + key;
+
+      if (tasksMap.has(key)) {
+        duplicateEntries++;
+        duplicateKeysSet.add(key);
+        const existing = tasksMap.get(key)!;
+        if (!existing.sprintIds.includes(sprint.id)) {
+          existing.sprintIds.push(sprint.id);
+        }
+        if (!existing.resolved && f.resolutiondate) {
+          existing.resolved = f.resolutiondate;
+        }
+        if (existing.description.length < descriptionText.length) {
+          existing.description = descriptionText;
+        }
+        if (commentsText.length > existing.comments.length) {
+          existing.comments = commentsText.trim();
+        }
+      } else {
+        tasksMap.set(key, {
+          key,
+          summary: f.summary || '',
+          status: (f.status && f.status.name) || '',
+          created: f.created || '',
+          resolved: f.resolutiondate || null,
+          assignee: assigneeName,
+          reporter: reporterName,
+          description: descriptionText,
+          comments: commentsText.trim(),
+          sprintIds: [sprint.id],
+          url: issueUrl,
+        });
+      }
+    }
+  }
+
+  return {
+    tasks: Array.from(tasksMap.values()),
+    totalEntries,
+    uniqueCount: tasksMap.size,
+    duplicateEntries,
+    duplicateKeys: Array.from(duplicateKeysSet),
+    sprints: sprints.map((s) => ({ id: s.id, name: s.name })),
+  };
 }
